@@ -1,73 +1,118 @@
 """The Nanny orchestration graph, built on the real Google ADK 2.0 workflow
-engine (``google.adk.workflow``).
+engine (``google.adk.workflow``) and real ADK agents (``google.adk.agents``).
 
-Mirrors the PRD's Deterministic-First Router-Dispatcher DAG:
+    START -> IngestNode --(bypass)--------------------------> RouterNode
+                \\--(to_classify)--> ClassifierAgent (LLM) --> ClassifierPostProcessNode --(extracted)--> RouterNode
+                \\--(error)-------------------------------------------------------------------------------------> ErrorNode
+                                                                              \\--(error)------------------------> ErrorNode
+    RouterNode -> SaveActivityNode --(saved)--> ResponderAgent (LLM)
+                                    \\--(error)----------------------------> ErrorNode
 
-    START -> ClassifierNode -> RouterNode -> SaveActivityNode -> ResponderNode
-                  \\_____________________________/
-                              (error branch, either node) -> ErrorNode
+``IngestNode``, ``RouterNode``, ``SaveActivityNode``, and ``ErrorNode`` are
+plain deterministic ``FunctionNode``s. ``ClassifierAgent`` and
+``ResponderAgent`` (see ``nanny/agents.py``) are real ``google.adk.agents.
+LlmAgent`` instances wired directly into the graph — this is a genuine
+multi-agent ADK system, not a single workflow with LLM calls stuffed inside
+plain function nodes.
 
 Every node reads and writes the shared ``ctx.state`` (the real ADK session
 state, backed by the session service) rather than passing ad hoc arguments,
-exactly as the PRD's shared data schema section describes.
+matching the PRD's shared ``BabyActivity`` schema.
 """
 
 from __future__ import annotations
 
+import json
 import logging
+from collections.abc import Callable
 
 from google.adk.agents.context import Context
 from google.adk.apps import App
 from google.adk.workflow import START, Edge, Workflow, node
 
 from .activity import ActivityError, BabyActivity
-from .llm import extract_activity, synthesize_response
+from .agents import build_classifier_agent, build_responder_agent
 from .store import Store
 
 logger = logging.getLogger("nanny.workflow")
 
+DEFAULT_CLIENT_ID = "default"
 
-def build_app(store: Store) -> App:
-    """Constructs the ADK App wrapping the Nanny workflow graph.
 
-    A single ``Store`` instance (the deterministic datastore) is closed over
-    by ``save_activity_node`` — this is the one node in the graph forbidden
-    from touching an LLM, matching the PRD's Step 4 requirement.
+def build_app(store_resolver: Callable[[str], Store]) -> App:
+    """Constructs the ADK App wrapping the Nanny multi-agent workflow graph.
+
+    ``store_resolver`` maps a per-visitor client id (set into ``ctx.state``
+    by the caller, e.g. ``server.py``, before each turn) to that visitor's
+    own ``Store`` — each caller gets their own activity log, not one shared
+    global log. Resolving the store dynamically per turn (rather than
+    closing over one fixed instance) is what lets a single graph/agent set
+    serve every client. ``save_activity_node`` is the one node in the graph
+    forbidden from touching an LLM, matching the PRD's Step 4 requirement.
     """
 
     @node
-    async def classifier_node(ctx: Context) -> None:
-        """Step 2: Intent Classification & Entity Extraction.
+    async def ingest_node(ctx: Context) -> None:
+        """Step 1/2 entry: Payload Ingestion + Conditional Skip.
 
-        Quick-tap payloads are passed through unchanged (Conditional Skip).
-        Chat text is routed to LLM extraction (or its offline fallback).
+        Quick-tap payloads are validated and passed through unchanged,
+        bypassing the LLM entirely. Chat text is routed to ClassifierAgent.
         """
         mode = ctx.state.get("input_mode")
-        now_iso = ctx.state.get("now_iso")
-        try:
-            if mode == "quick_tap":
+        if mode == "quick_tap":
+            try:
                 payload = ctx.state.get("quick_tap_payload") or {}
-                activity = BabyActivity.from_dict(payload)
-                activity.validate()
+                activity = BabyActivity.from_dict(payload).validate()
                 ctx.state["activity"] = activity.to_dict()
                 ctx.state["ingestion_branch"] = "bypass"
                 ctx.state["used_llm_extraction"] = False
                 ctx.route = "bypass"
-            elif mode == "chat":
-                text = ctx.state.get("chat_text") or ""
-                result = await extract_activity(text, now_iso=now_iso)
-                result.activity.validate()
-                ctx.state["activity"] = result.activity.to_dict()
-                ctx.state["ingestion_branch"] = "extracted"
-                ctx.state["used_llm_extraction"] = result.used_llm
-                ctx.route = "extracted"
-            else:
-                raise ActivityError(f"unknown input_mode {mode!r}")
+            except ActivityError as exc:
+                logger.info("IngestNode: rejecting quick-tap payload: %s", exc)
+                ctx.state["error"] = str(exc)
+                ctx.state["last_status"] = "error"
+                ctx.route = "error"
+        elif mode == "chat":
+            # Optimistic default — ClassifierAgent's offline-fallback or
+            # security callbacks overwrite this to False if either fires.
+            ctx.state["used_llm_extraction"] = True
+            ctx.route = "to_classify"
+        else:
+            ctx.state["error"] = f"unknown input_mode {mode!r}"
+            ctx.state["last_status"] = "error"
+            ctx.route = "error"
+
+    classifier_agent = build_classifier_agent()
+
+    @node
+    async def classifier_postprocess_node(ctx: Context) -> None:
+        """Deterministic validation of ClassifierAgent's structured output.
+
+        Keeps schema/security enforcement out of the LLM's hands: a node
+        forbidden from touching an LLM is the only thing that can route a
+        record onward to storage.
+        """
+        if ctx.state.get("security_blocked"):
+            ctx.state["last_status"] = "error"
+            ctx.route = "error"
+            return
+        if ctx.state.get("heuristic_error"):
+            ctx.state["error"] = ctx.state["heuristic_error"]
+            ctx.state["last_status"] = "error"
+            ctx.route = "error"
+            return
+        try:
+            extracted = ctx.state.get("extracted_activity") or {}
+            activity = BabyActivity.from_dict(extracted).validate()
         except ActivityError as exc:
-            logger.info("ClassifierNode: rejecting input: %s", exc)
+            logger.info("ClassifierPostProcessNode: rejecting record: %s", exc)
             ctx.state["error"] = str(exc)
             ctx.state["last_status"] = "error"
             ctx.route = "error"
+            return
+        ctx.state["activity"] = activity.to_dict()
+        ctx.state["ingestion_branch"] = "extracted"
+        ctx.route = "extracted"
 
     @node
     async def router_node(ctx: Context) -> None:
@@ -75,8 +120,8 @@ def build_app(store: Store) -> App:
 
         Deterministic bookkeeping only — declares which ingestion branch
         produced the record, then unconditionally forwards to storage. No
-        generative side-effects happen here or after this point until the
-        ResponderNode.
+        generative side-effects happen here or after this point until
+        ResponderAgent.
         """
         branch = ctx.state.get("ingestion_branch")
         logger.info("RouterNode: dispatching %s-branch record to storage", branch)
@@ -85,10 +130,16 @@ def build_app(store: Store) -> App:
     async def save_activity_node(ctx: Context) -> None:
         """Step 4: Storage Execution — 100% deterministic, no LLM involved."""
         try:
+            client_id = ctx.state.get("client_id") or DEFAULT_CLIENT_ID
+            store = store_resolver(client_id)
             activity = BabyActivity.from_dict(ctx.state.get("activity") or {})
             result = store.append(activity)
             ctx.state["save_result"] = result.to_dict()
+            ctx.state["save_result_json"] = json.dumps(result.to_dict())
             ctx.state["last_status"] = "ok"
+            # Optimistic default — ResponderAgent's offline-fallback callback
+            # overwrites this to False if it fires.
+            ctx.state["used_llm_response"] = True
             ctx.route = "saved"
         except ActivityError as exc:
             logger.info("SaveActivityNode: rejecting record: %s", exc)
@@ -96,13 +147,7 @@ def build_app(store: Store) -> App:
             ctx.state["last_status"] = "error"
             ctx.route = "error"
 
-    @node
-    async def responder_node(ctx: Context) -> None:
-        """Step 5: Conversational Synthesis — crafts the natural summary."""
-        save_result = ctx.state.get("save_result")
-        result = await synthesize_response(save_result)
-        ctx.state["response_text"] = result.text
-        ctx.state["used_llm_response"] = result.used_llm
+    responder_agent = build_responder_agent()
 
     @node
     async def error_node(ctx: Context) -> None:
@@ -114,15 +159,23 @@ def build_app(store: Store) -> App:
     workflow = Workflow(
         name="nanny_workflow",
         edges=[
-            (START, classifier_node),
+            (START, ingest_node),
+            Edge(from_node=ingest_node, to_node=router_node, route="bypass"),
+            Edge(from_node=ingest_node, to_node=classifier_agent, route="to_classify"),
+            Edge(from_node=ingest_node, to_node=error_node, route="error"),
+            (classifier_agent, classifier_postprocess_node),
             Edge(
-                from_node=classifier_node,
+                from_node=classifier_postprocess_node,
                 to_node=router_node,
-                route=["bypass", "extracted"],
+                route="extracted",
             ),
-            Edge(from_node=classifier_node, to_node=error_node, route="error"),
+            Edge(
+                from_node=classifier_postprocess_node,
+                to_node=error_node,
+                route="error",
+            ),
             (router_node, save_activity_node),
-            Edge(from_node=save_activity_node, to_node=responder_node, route="saved"),
+            Edge(from_node=save_activity_node, to_node=responder_agent, route="saved"),
             Edge(from_node=save_activity_node, to_node=error_node, route="error"),
         ],
     )
