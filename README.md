@@ -163,18 +163,88 @@ uv run agents-cli lint  # ruff + codespell + ty, via the ADK CLI toolchain
 
 ## Deployment
 
-Nanny is **intentionally local-only** — no Docker, CI/CD, Cloud Run, or
-Pub/Sub. This is a deliberate scope decision, not a gap:
+Nanny runs locally by default, but can be deployed to **Cloud Run** (backend)
+with a static frontend on **GitHub Pages**. There's no Pub/Sub here — this
+app has no async/event-driven ingestion to decouple (unlike, say, an
+expense-report pipeline), so a topic wouldn't do anything for it.
 
-- The app is a single-user, single-process local tool (one JSON-lines file,
-  one FastAPI server) with no async/event-driven ingestion to decouple —
-  there's no workload here that a Pub/Sub topic would actually help with.
-- This sandbox has no `gcloud` CLI or GCP credentials, so any cloud config
-  written here couldn't be executed or verified anyway.
+### Known limitation: storage is not durable across deploys
 
-If you want to deploy this yourself later, `uv run agents-cli scaffold
-enhance . --adk -d cloud_run --dry-run` (from the `google-agents-cli` dev
-dependency already installed) previews the Cloud Run/Docker scaffolding it
-would add against your own GCP project; drop `--dry-run` to actually write
-the files once you're ready. That's a separate, deliberate step, not
-something this repo does by default.
+Cloud Run's filesystem is ephemeral per instance. `data/activity_log.jsonl`
+survives fine across requests to the *same* warm instance, but resets on a
+new revision, a cold restart, or if it ever scales beyond one instance. The
+commands below pin `--min-instances=1 --max-instances=1` to make that
+reasonably stable for a demo, but a redeploy still wipes the log. If you want
+real durability, migrate `nanny/store.py` to Firestore — out of scope here.
+
+### Known limitation: no per-user auth
+
+There's a single shared session and activity log for every caller (fine for
+one person locally; not fine for an open public URL). `NANNY_API_TOKEN`
+(below) is a low-effort gate against random internet traffic, not real
+multi-tenant access control — anyone with the token shares one log.
+
+### 1. Deploy the backend to Cloud Run
+
+Requires the `gcloud` CLI, authenticated against your project (this repo's
+sandbox has neither, so run this from your own machine or Cloud Shell):
+
+```sh
+export GOOGLE_CLOUD_PROJECT=friendly-idea-192102
+export GOOGLE_CLOUD_LOCATION=us-east1
+
+gcloud config set project "$GOOGLE_CLOUD_PROJECT"
+gcloud services enable run.googleapis.com secretmanager.googleapis.com \
+  --project "$GOOGLE_CLOUD_PROJECT"
+
+# Store your Gemini key in Secret Manager rather than as a plain env var.
+printf '%s' "$GEMINI_API_KEY" | gcloud secrets create nanny-gemini-key \
+  --project "$GOOGLE_CLOUD_PROJECT" --data-file=- \
+  || printf '%s' "$GEMINI_API_KEY" | gcloud secrets versions add nanny-gemini-key \
+  --project "$GOOGLE_CLOUD_PROJECT" --data-file=-
+
+# Pick your own token; the GitHub Pages frontend will need the same value.
+export NANNY_API_TOKEN=$(openssl rand -hex 16)
+echo "Save this token, you'll need it for docs/index.html: $NANNY_API_TOKEN"
+
+gcloud run deploy nanny \
+  --source . \
+  --project "$GOOGLE_CLOUD_PROJECT" \
+  --region "$GOOGLE_CLOUD_LOCATION" \
+  --allow-unauthenticated \
+  --min-instances=1 --max-instances=1 \
+  --set-secrets=GEMINI_API_KEY=nanny-gemini-key:latest \
+  --set-env-vars="NANNY_API_TOKEN=${NANNY_API_TOKEN},NANNY_ALLOWED_ORIGINS=https://YOUR-USERNAME.github.io"
+```
+
+`--source .` has Cloud Build build the image from this repo's `Dockerfile` —
+you don't need Docker installed locally. The command prints a
+`https://nanny-<hash>-<region>.a.run.app`-style Service URL when it finishes;
+that's your backend.
+
+### 2. Point the GitHub Pages frontend at it
+
+1. Edit `docs/index.html`: replace `REPLACE-WITH-YOUR-CLOUD-RUN-URL...` with
+   the Service URL from step 1, and set `NANNY_API_TOKEN` to the token you
+   generated above.
+2. Commit and push.
+3. In the repo's GitHub **Settings → Pages**, set Source to "Deploy from a
+   branch", branch `main`, folder `/docs` (one-time setup — this toggle
+   can't be done via `git push` alone).
+4. Your frontend is then live at `https://YOUR-USERNAME.github.io/nanny/`.
+
+### Verify the deployed backend
+
+```sh
+SERVICE_URL="https://nanny-xxxxx-ue.a.run.app"  # from step 1
+
+curl -s -X POST "$SERVICE_URL/api/quick-tap" \
+  -H 'Content-Type: application/json' \
+  -H "X-Nanny-Token: $NANNY_API_TOKEN" \
+  -d '{"activity_type":"bottle","quantity":4,"unit":"oz","notes":""}'
+```
+
+### Local dev is unaffected
+
+`NANNY_API_TOKEN` and `NANNY_ALLOWED_ORIGINS` are both opt-in — unset, `uv
+run main.py` behaves exactly as before with no auth and no CORS headers.
