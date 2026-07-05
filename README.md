@@ -74,6 +74,21 @@ flowchart TD
 Every node reads/writes the real ADK session state (`ctx.state`), matching
 the PRD's shared `BabyActivity` schema.
 
+## Commands quick reference
+
+| Task | Command |
+|---|---|
+| Install deps | `uv sync` |
+| Run the app | `uv run main.py` |
+| Stop the app | `Ctrl+C`, or `pkill -f "python main.py"` if backgrounded |
+| Run tests | `uv run pytest` |
+| Lint (ruff + codespell + ty) | `uv run agents-cli lint` |
+| Quick-tap via API | `curl -X POST localhost:8000/api/quick-tap -H 'Content-Type: application/json' -d '{"activity_type":"bottle","quantity":4,"unit":"oz","notes":""}'` |
+| Chat via API | `curl -X POST localhost:8000/api/chat -H 'Content-Type: application/json' -d '{"text":"he pooped a lot at 3 PM"}'` |
+| View activity history | `curl localhost:8000/api/history` |
+
+See below for the full walkthrough of each step.
+
 ## Getting started
 
 ### Prerequisites
@@ -97,8 +112,9 @@ uv run main.py
 ```
 
 Then open **http://127.0.0.1:8000** in a browser. You'll see the dual-panel
-UI: quick-tap buttons on the left, an AI chat log on the right. Both write to
-the same running totals.
+UI (served from `web/index.html` by `nanny/server.py`): quick-tap buttons on
+the left, an AI chat log on the right. Both write to the same running
+totals.
 
 The server binds to `127.0.0.1:8000` by default; set `NANNY_PORT` to change
 the port. Activity data is appended to `data/activity_log.jsonl` (created on
@@ -145,5 +161,20 @@ uv run pytest           # run tests
 uv run agents-cli lint  # ruff + codespell + ty, via the ADK CLI toolchain
 ```
 
-Deployment, CI/CD, and cloud configs are explicitly out of scope for this
-project.
+## Deployment
+
+Nanny is **intentionally local-only** — no Docker, CI/CD, Cloud Run, or
+Pub/Sub. This is a deliberate scope decision, not a gap:
+
+- The app is a single-user, single-process local tool (one JSON-lines file,
+  one FastAPI server) with no async/event-driven ingestion to decouple —
+  there's no workload here that a Pub/Sub topic would actually help with.
+- This sandbox has no `gcloud` CLI or GCP credentials, so any cloud config
+  written here couldn't be executed or verified anyway.
+
+If you want to deploy this yourself later, `uv run agents-cli scaffold
+enhance . --adk -d cloud_run --dry-run` (from the `google-agents-cli` dev
+dependency already installed) previews the Cloud Run/Docker scaffolding it
+would add against your own GCP project; drop `--dry-run` to actually write
+the files once you're ready. That's a separate, deliberate step, not
+something this repo does by default.
