@@ -7,17 +7,20 @@ COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /usr/local/bin/
 WORKDIR /app
 
 # Install dependencies first so this layer is cached across code-only changes.
+# --extra db bundles asyncpg + google-adk[db] so NANNY_DB_URL (DatabaseSessionService)
+# works out of the box; it's a no-op if you never set that env var.
 COPY pyproject.toml uv.lock ./
-RUN uv sync --frozen --no-install-project --no-dev
+RUN uv sync --frozen --no-install-project --no-dev --extra db
 
 # Now copy the rest of the app (nanny/, web/, skills/, main.py) and install it.
 COPY . .
-RUN uv sync --frozen --no-dev
+RUN uv sync --frozen --no-dev --extra db
 
 ENV PATH="/app/.venv/bin:${PATH}"
 # Cloud Run's ephemeral filesystem resets on restart/redeploy — see README's
-# Deployment section for what that means for this path.
-ENV NANNY_DATA_PATH=/app/data/activity_log.jsonl
+# Deployment section for what that means for this path (per-client activity
+# logs, one file per X-Nanny-Client-Id under this directory).
+ENV NANNY_DATA_DIR=/app/data
 
 EXPOSE 8080
 # Cloud Run injects $PORT (usually 8080); default it for local `docker run`.

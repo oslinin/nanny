@@ -64,7 +64,7 @@ flowchart TD
 - **RouterNode** — deterministic bookkeeping; declares which branch produced
   the record.
 - **SaveActivityNode** — 100% deterministic; appends to a local JSON-lines
-  log (`data/activity_log.jsonl`).
+  log, one file per client id (`data/<client-id>.jsonl`).
 - **ResponderAgent** — a real `LlmAgent` that crafts a one-sentence natural
   confirmation from the save transaction metadata, optionally consulting the
   `care-tips` skill. Falls back to a template when no API key is configured.
@@ -117,8 +117,9 @@ the left, an AI chat log on the right. Both write to the same running
 totals.
 
 The server binds to `127.0.0.1:8000` by default; set `NANNY_PORT` to change
-the port. Activity data is appended to `data/activity_log.jsonl` (created on
-first write).
+the port. Your browser gets a persistent random id on first load (kept in
+`localStorage`), and activity data is appended to `data/<that-id>.jsonl`
+(created on first write) — each browser gets its own log.
 
 To stop the server, press `Ctrl+C` (or, if it was started in the background,
 `pkill -f "python main.py"`).
@@ -168,21 +169,74 @@ with a static frontend on **GitHub Pages**. There's no Pub/Sub here — this
 app has no async/event-driven ingestion to decouple (unlike, say, an
 expense-report pipeline), so a topic wouldn't do anything for it.
 
-### Known limitation: storage is not durable across deploys
+### Per-visitor isolation
 
-Cloud Run's filesystem is ephemeral per instance. `data/activity_log.jsonl`
-survives fine across requests to the *same* warm instance, but resets on a
-new revision, a cold restart, or if it ever scales beyond one instance. The
-commands below pin `--min-instances=1 --max-instances=1` to make that
-reasonably stable for a demo, but a redeploy still wipes the log. If you want
-real durability, migrate `nanny/store.py` to Firestore — out of scope here.
+Each browser gets its own id (`X-Nanny-Client-Id`, a UUID generated once by
+the frontend and kept in `localStorage`), which keys both that visitor's ADK
+session *and* their own activity log file — two different callers no longer
+share one conversation or one set of running totals. `NANNY_API_TOKEN` is
+still a single shared secret, though: it's a low-effort gate against random
+internet traffic (not per-user auth) — anyone with the token can create as
+many isolated client ids as they want.
 
-### Known limitation: no per-user auth
+### Known limitation: the activity log is not durable across deploys
 
-There's a single shared session and activity log for every caller (fine for
-one person locally; not fine for an open public URL). `NANNY_API_TOKEN`
-(below) is a low-effort gate against random internet traffic, not real
-multi-tenant access control — anyone with the token shares one log.
+Cloud Run's filesystem is ephemeral per instance. Each visitor's
+`data/<client-id>.jsonl` survives fine across requests to the *same* warm
+instance, but resets on a new revision, a cold restart, or if it ever scales
+beyond one instance. The commands below pin `--min-instances=1
+--max-instances=1` to make that reasonably stable for a demo, but a redeploy
+still wipes it. If you want real durability for the activity records
+themselves, migrate `nanny/store.py` to a real database — out of scope here.
+
+### Optional: durable session state via Cloud SQL
+
+By default ADK session state (the conversation flow between nodes — not the
+activity log above) lives in memory and is lost on restart just like the
+JSON files. Setting `NANNY_DB_URL` switches to `DatabaseSessionService`,
+backed by a real database, so that part survives:
+
+```sh
+gcloud services enable sqladmin.googleapis.com --project "$GOOGLE_CLOUD_PROJECT"
+
+gcloud sql instances create nanny-db \
+  --project "$GOOGLE_CLOUD_PROJECT" \
+  --database-version=POSTGRES_16 \
+  --tier=db-f1-micro \
+  --region="$GOOGLE_CLOUD_LOCATION"
+
+gcloud sql databases create nanny --instance=nanny-db --project "$GOOGLE_CLOUD_PROJECT"
+
+export NANNY_DB_PASSWORD=$(openssl rand -hex 16)
+gcloud sql users set-password postgres --instance=nanny-db \
+  --project "$GOOGLE_CLOUD_PROJECT" --password="$NANNY_DB_PASSWORD"
+
+printf '%s' "$NANNY_DB_PASSWORD" | gcloud secrets create nanny-db-password \
+  --project "$GOOGLE_CLOUD_PROJECT" --data-file=- \
+  || printf '%s' "$NANNY_DB_PASSWORD" | gcloud secrets versions add nanny-db-password \
+  --project "$GOOGLE_CLOUD_PROJECT" --data-file=-
+
+export CONNECTION_NAME=$(gcloud sql instances describe nanny-db \
+  --project "$GOOGLE_CLOUD_PROJECT" --format='value(connectionName)')
+```
+
+Then add these flags to the `gcloud run deploy` command below:
+
+```sh
+  --add-cloudsql-instances="$CONNECTION_NAME" \
+  --set-secrets="NANNY_DB_PASSWORD=nanny-db-password:latest" \
+  --set-env-vars="...,NANNY_DB_URL=postgresql+asyncpg://postgres:REPLACE_AT_RUNTIME@/nanny?host=/cloudsql/${CONNECTION_NAME}"
+```
+
+`DatabaseSessionService` uses SQLAlchemy's *async* engine, so the driver
+matters: this repo's `db` extra installs `asyncpg` (Postgres, async) rather
+than `pg8000`/`psycopg2` (sync-only, will not work here). Since
+`--set-env-vars` can't reference a secret directly, either bake the password
+into `NANNY_DB_URL` via `--set-secrets` on that exact env var instead of a
+separate `NANNY_DB_PASSWORD`, or fetch the secret and interpolate it into the
+URL before running `gcloud run deploy`. `google-adk[db]` + `asyncpg` are
+already in the container image (see `Dockerfile`) whether or not you set
+`NANNY_DB_URL` — it's a no-op if you don't.
 
 ### 1. Deploy the backend to Cloud Run
 
@@ -241,10 +295,15 @@ SERVICE_URL="https://nanny-xxxxx-ue.a.run.app"  # from step 1
 curl -s -X POST "$SERVICE_URL/api/quick-tap" \
   -H 'Content-Type: application/json' \
   -H "X-Nanny-Token: $NANNY_API_TOKEN" \
+  -H "X-Nanny-Client-Id: smoke-test" \
   -d '{"activity_type":"bottle","quantity":4,"unit":"oz","notes":""}'
 ```
 
 ### Local dev is unaffected
 
-`NANNY_API_TOKEN` and `NANNY_ALLOWED_ORIGINS` are both opt-in — unset, `uv
-run main.py` behaves exactly as before with no auth and no CORS headers.
+`NANNY_API_TOKEN`, `NANNY_ALLOWED_ORIGINS`, and `NANNY_DB_URL` are all
+opt-in — unset, `uv run main.py` behaves exactly as before: no auth, no CORS
+headers, in-memory sessions. `X-Nanny-Client-Id` isn't opt-in, but is
+backward compatible — requests without it (like the `curl` examples earlier
+in this README) fall back to one shared `"default"` id, matching the
+original single-user behavior.

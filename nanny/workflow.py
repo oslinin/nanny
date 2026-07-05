@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import json
 import logging
+from collections.abc import Callable
 
 from google.adk.agents.context import Context
 from google.adk.apps import App
@@ -35,13 +36,19 @@ from .store import Store
 
 logger = logging.getLogger("nanny.workflow")
 
+DEFAULT_CLIENT_ID = "default"
 
-def build_app(store: Store) -> App:
+
+def build_app(store_resolver: Callable[[str], Store]) -> App:
     """Constructs the ADK App wrapping the Nanny multi-agent workflow graph.
 
-    A single ``Store`` instance (the deterministic datastore) is closed over
-    by ``save_activity_node`` — this is the one node in the graph forbidden
-    from touching an LLM, matching the PRD's Step 4 requirement.
+    ``store_resolver`` maps a per-visitor client id (set into ``ctx.state``
+    by the caller, e.g. ``server.py``, before each turn) to that visitor's
+    own ``Store`` — each caller gets their own activity log, not one shared
+    global log. Resolving the store dynamically per turn (rather than
+    closing over one fixed instance) is what lets a single graph/agent set
+    serve every client. ``save_activity_node`` is the one node in the graph
+    forbidden from touching an LLM, matching the PRD's Step 4 requirement.
     """
 
     @node
@@ -123,6 +130,8 @@ def build_app(store: Store) -> App:
     async def save_activity_node(ctx: Context) -> None:
         """Step 4: Storage Execution — 100% deterministic, no LLM involved."""
         try:
+            client_id = ctx.state.get("client_id") or DEFAULT_CLIENT_ID
+            store = store_resolver(client_id)
             activity = BabyActivity.from_dict(ctx.state.get("activity") or {})
             result = store.append(activity)
             ctx.state["save_result"] = result.to_dict()

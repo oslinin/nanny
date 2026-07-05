@@ -166,6 +166,21 @@
 const API_BASE = window.NANNY_API_BASE || '';
 const API_TOKEN = window.NANNY_API_TOKEN || '';
 
+// A stable per-browser id so each visitor gets their own session and
+// activity log on the backend, instead of everyone sharing one. Generated
+// once and kept in localStorage; clearing site data resets it to a fresh
+// (empty) log.
+function getClientId() {
+  const key = 'nanny_client_id';
+  let id = localStorage.getItem(key);
+  if (!id) {
+    id = crypto.randomUUID();
+    localStorage.setItem(key, id);
+  }
+  return id;
+}
+const CLIENT_ID = getClientId();
+
 const log = document.getElementById('log');
 
 function addMessage(role, text, isError) {
@@ -181,7 +196,7 @@ function addMessage(role, text, isError) {
 }
 
 async function postJSON(path, body) {
-  const headers = { 'Content-Type': 'application/json' };
+  const headers = { 'Content-Type': 'application/json', 'X-Nanny-Client-Id': CLIENT_ID };
   if (API_TOKEN) headers['X-Nanny-Token'] = API_TOKEN;
   const res = await fetch(API_BASE + path, { method: 'POST', headers, body: JSON.stringify(body) });
   const data = await res.json();

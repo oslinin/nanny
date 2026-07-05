@@ -18,7 +18,7 @@ def store(tmp_path):
 
 
 async def _run_turn(store, state_delta, text, session_id):
-    adk_app = build_app(store)
+    adk_app = build_app(lambda _client_id: store)
     session_service = InMemorySessionService()
     await session_service.create_session(
         app_name=APP_NAME, user_id=USER_ID, session_id=session_id, state={}
@@ -140,7 +140,7 @@ async def test_running_total_accumulates_across_turns_in_same_session(store):
             "notes": "",
         }
 
-    adk_app = build_app(store)
+    adk_app = build_app(lambda _client_id: store)
     session_service = InMemorySessionService()
     await session_service.create_session(
         app_name=APP_NAME, user_id=USER_ID, session_id="s4", state={}
