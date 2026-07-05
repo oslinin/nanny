@@ -1,3 +1,5 @@
+from enum import Enum
+
 import pytest
 
 from nanny.activity import ActivityError, BabyActivity
@@ -50,3 +52,25 @@ def test_from_dict_ignores_unknown_keys_and_coerces_quantity():
     )
     assert a.quantity == 50.0
     assert not hasattr(a, "unexpected_field")
+
+
+def test_from_dict_coerces_enum_like_values_to_plain_str():
+    # Regression test: a structured-output schema field backed by an Enum
+    # (e.g. a classic `Enum(..., type=str)` mixin) round-trips through
+    # pydantic's model_dump() as the raw enum member, whose str() is
+    # "ClassName.member" rather than the plain value. from_dict must coerce
+    # it to a plain string so f-string interpolation never leaks that repr.
+    LeakyEnum = Enum("LeakyEnum", {"poop": "poop"}, type=str)
+    a = BabyActivity.from_dict(
+        {
+            "timestamp": "2026-07-05T15:00:00+00:00",
+            "activity_type": LeakyEnum.poop,
+            "quantity": 1.0,
+            "unit": "count",
+            "notes": "",
+        }
+    )
+    assert a.activity_type == "poop"
+    assert str(a.activity_type) == "poop"
+    assert isinstance(a.activity_type, str)
+    assert type(a.activity_type) is str
