@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass
 from datetime import datetime
+from enum import Enum
 
 # Canonical vocabularies. The first four activity types come straight from the
 # PRD; "wet" is added to support the "Log 1 Wet Diaper" quick-tap control.
@@ -49,6 +50,15 @@ class BabyActivity:
         clean = {k: data[k] for k in data if k in allowed}
         if "quantity" in clean and clean["quantity"] is not None:
             clean["quantity"] = float(clean["quantity"])
+        # Coerce str-like values (e.g. an Enum member from a structured LLM
+        # response) to plain str so formatting/serialization never leaks a
+        # wrapper type's repr instead of its value. An Enum's own str() may
+        # render as "ClassName.member" rather than the value, so unwrap
+        # `.value` explicitly rather than relying on str().
+        for key in ("activity_type", "unit", "timestamp", "notes"):
+            if key in clean and clean[key] is not None:
+                value = clean[key]
+                clean[key] = str(value.value) if isinstance(value, Enum) else str(value)
         return cls(**clean)
 
     def validate(self) -> BabyActivity:
