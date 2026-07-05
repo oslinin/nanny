@@ -15,6 +15,11 @@ dev = [
     "google-agents-cli>=1.0.0",
     "pytest>=9.1.1",
     "pytest-asyncio>=1.4.0",
+    # Needed to exercise DatabaseSessionService in tests: google-adk[db] for
+    # the class itself, aiosqlite as a lightweight async driver so tests
+    # don't need a real Postgres/Cloud SQL instance.
+    "google-adk[db]>=2.3.0",
+    "aiosqlite>=0.20.0",
 ]
 
 [project.optional-dependencies]
@@ -22,6 +27,12 @@ lint = [
     "ruff>=0.15.20",
     "ty>=0.0.1a0",
     "codespell>=2.2.0,<3.0.0",
+]
+db = [
+    "google-adk[db]>=2.3.0",
+    # DatabaseSessionService uses SQLAlchemy's *async* engine, so this must
+    # be an async-capable driver — pg8000/psycopg2 (sync) will not work.
+    "asyncpg>=0.30.0",
 ]
 
 [tool.ruff]
