@@ -123,7 +123,8 @@ def _build_session_service() -> BaseSessionService:
     if not _DB_URL:
         return InMemorySessionService()
     # Imported lazily: requires the optional `db` dependency group
-    # (google-adk[db] + a DB driver like pg8000), not needed for local dev.
+    # (google-adk[db] + an async DB driver like asyncpg), not needed for
+    # local dev.
     from google.adk.sessions import DatabaseSessionService
 
     return DatabaseSessionService(db_url=_DB_URL)
