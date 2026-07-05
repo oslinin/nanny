@@ -34,11 +34,13 @@ flowchart TD
     Router["RouterNode\n(deterministic dispatch)"]
     Save["SaveActivityNode\n(deterministic storage, no LLM)"]
     Responder["ResponderAgent\n(real LlmAgent — natural-language summary + care-tips skill)"]
+    History["HistoryNode\n(deterministic: read-only activity history)"]
     ErrorNode["ErrorNode\n(friendly rejection message)"]
 
     START --> Ingest
     Ingest -- "bypass (quick-tap)" --> Router
     Ingest -- "to_classify (chat)" --> Classifier
+    Ingest -- "get_history" --> History
     Ingest -- "error" --> ErrorNode
     Classifier --> Postprocess
     Postprocess -- "extracted" --> Router
@@ -68,6 +70,11 @@ flowchart TD
 - **ResponderAgent** — a real `LlmAgent` that crafts a one-sentence natural
   confirmation from the save transaction metadata, optionally consulting the
   `care-tips` skill. Falls back to a template when no API key is configured.
+- **HistoryNode** — deterministic, read-only; returns the resolved client's
+  activity history. `/api/history` flows through this node (i.e. through the
+  same graph as everything else) rather than the dashboard/bridge reading
+  `Store` directly, so a deployed graph is fully self-contained behind
+  `stream_query`/`async_stream_query` — see Deployment below.
 - **ErrorNode** — terminal branch reached whenever a prior node rejects the
   input (bad schema, unrecognized text, or a security block).
 
@@ -164,15 +171,24 @@ uv run agents-cli lint  # ruff + codespell + ty, via the ADK CLI toolchain
 
 ## Deployment
 
-Nanny runs locally by default, but can be deployed to **Cloud Run** (backend)
-with a static frontend on **GitHub Pages**. There's no Pub/Sub here — this
-app has no async/event-driven ingestion to decouple (unlike, say, an
-expense-report pipeline), so a topic wouldn't do anything for it.
+Nanny runs locally by default (in-process graph, in-memory session, no GCP
+credentials needed). For production, the graph deploys to **Vertex AI Agent
+Runtime** (Agent Engine) and a thin **Cloud Run** dashboard/bridge — with an
+optional static frontend on **GitHub Pages** — proxies to it. This mirrors
+the course's own "Vibecode and Deploy a Frontend Dashboard" codelab: the
+agent lives on Agent Runtime; the dashboard is a small IAM-credentialed
+bridge, not the whole app. There's no Pub/Sub here — this app has no
+async/event-driven ingestion to decouple (unlike, say, an expense-report
+pipeline), so a topic wouldn't do anything for it.
 
-The steps below (deploy backend → point Pages at it) are everything needed
-for a one-time deploy. Skip straight to "Optional, later version" only if
-you specifically want state to survive a restart — it isn't required to get
-a working deployment.
+Why a bridge at all, rather than calling Agent Runtime straight from the
+browser? A deployed Agent Runtime resource is IAM-gated (OAuth2/ADC) with
+`stream_query`/`async_stream_query` as its only invocable operations — no
+anonymous HTTP, so a public frontend can't call it directly. `nanny/server.py`
+still exists for exactly this reason: it's the same FastAPI app as local dev,
+just pointed at a remote graph instead of running one in-process, so the
+frontend and the API contract (`/api/quick-tap`, `/api/chat`,
+`/api/history`) never change.
 
 ### Per-visitor isolation
 
@@ -184,20 +200,36 @@ still a single shared secret, though: it's a low-effort gate against random
 internet traffic (not per-user auth) — anyone with the token can create as
 many isolated client ids as they want.
 
-### 1. Deploy the backend to Cloud Run
+### 1. Deploy the agent to Vertex AI Agent Runtime
 
-Requires the `gcloud` CLI, authenticated against your project (this repo's
-sandbox has neither, so run this from your own machine or Cloud Shell):
+Requires the `gcloud` CLI and Python environment authenticated against your
+project (this repo's sandbox has neither, so run this from your own machine
+or Cloud Shell):
 
 ```sh
 export GOOGLE_CLOUD_PROJECT=your-gcp-project-id
 export GOOGLE_CLOUD_LOCATION=us-east1
+export GOOGLE_CLOUD_STAGING_BUCKET=gs://your-staging-bucket
 
 gcloud config set project "$GOOGLE_CLOUD_PROJECT"
+gcloud services enable aiplatform.googleapis.com --project "$GOOGLE_CLOUD_PROJECT"
+
+uv sync --extra agent-engine
+uv run python -m nanny.agent_engine_app
+```
+
+This calls `nanny/agent_engine_app.py::deploy()`, which wraps the exact same
+graph (`nanny.workflow.build_app`) in `vertexai.agent_engines.AdkApp` and
+deploys it via `agent_engines.create(...)`. It prints a resource name like
+`projects/.../locations/us-east1/reasoningEngines/1234567890` when it
+finishes — save it, the dashboard needs it.
+
+### 2. Deploy the dashboard to Cloud Run
+
+```sh
+# Store your Gemini key in Secret Manager rather than as a plain env var.
 gcloud services enable run.googleapis.com secretmanager.googleapis.com \
   --project "$GOOGLE_CLOUD_PROJECT"
-
-# Store your Gemini key in Secret Manager rather than as a plain env var.
 printf '%s' "$GEMINI_API_KEY" | gcloud secrets create nanny-gemini-key \
   --project "$GOOGLE_CLOUD_PROJECT" --data-file=- \
   || printf '%s' "$GEMINI_API_KEY" | gcloud secrets versions add nanny-gemini-key \
@@ -207,6 +239,8 @@ printf '%s' "$GEMINI_API_KEY" | gcloud secrets create nanny-gemini-key \
 export NANNY_API_TOKEN=$(openssl rand -hex 16)
 echo "Save this token, you'll need it for docs/index.html: $NANNY_API_TOKEN"
 
+export AGENT_ENGINE_RESOURCE_NAME="projects/.../locations/us-east1/reasoningEngines/1234567890"  # from step 1
+
 gcloud run deploy nanny \
   --source . \
   --project "$GOOGLE_CLOUD_PROJECT" \
@@ -214,18 +248,31 @@ gcloud run deploy nanny \
   --allow-unauthenticated \
   --min-instances=1 --max-instances=1 \
   --set-secrets=GEMINI_API_KEY=nanny-gemini-key:latest \
-  --set-env-vars="NANNY_API_TOKEN=${NANNY_API_TOKEN},NANNY_ALLOWED_ORIGINS=https://YOUR-USERNAME.github.io"
+  --set-env-vars="NANNY_API_TOKEN=${NANNY_API_TOKEN},NANNY_ALLOWED_ORIGINS=https://YOUR-USERNAME.github.io,NANNY_AGENT_ENGINE_RESOURCE_NAME=${AGENT_ENGINE_RESOURCE_NAME},GOOGLE_CLOUD_PROJECT=${GOOGLE_CLOUD_PROJECT},GOOGLE_CLOUD_LOCATION=${GOOGLE_CLOUD_LOCATION}"
+
+# The dashboard's own service account needs permission to call the deployed
+# agent — grant it the standard Agent Runtime caller role:
+export RUN_SERVICE_ACCOUNT=$(gcloud run services describe nanny \
+  --project "$GOOGLE_CLOUD_PROJECT" --region "$GOOGLE_CLOUD_LOCATION" \
+  --format='value(spec.template.spec.serviceAccountName)')
+gcloud projects add-iam-policy-binding "$GOOGLE_CLOUD_PROJECT" \
+  --member="serviceAccount:${RUN_SERVICE_ACCOUNT}" \
+  --role="roles/aiplatform.user"
 ```
 
 `--source .` has Cloud Build build the image from this repo's `Dockerfile` —
-you don't need Docker installed locally. The command prints a
-`https://nanny-<hash>-<region>.a.run.app`-style Service URL when it finishes;
-that's your backend.
+you don't need Docker installed locally. Setting
+`NANNY_AGENT_ENGINE_RESOURCE_NAME` is what switches `nanny/server.py` from
+its default in-process backend to the one that calls the deployed Agent
+Runtime resource (see `_AgentRuntimeBackend` in that file) — everything else
+about the dashboard is unchanged. The command prints a
+`https://nanny-<hash>-<region>.a.run.app`-style Service URL when it
+finishes; that's your backend.
 
-### 2. Point the GitHub Pages frontend at it
+### 3. Point the GitHub Pages frontend at it
 
 1. Edit `docs/index.html`: replace `REPLACE-WITH-YOUR-CLOUD-RUN-URL...` with
-   the Service URL from step 1, and set `NANNY_API_TOKEN` to the token you
+   the Service URL from step 2, and set `NANNY_API_TOKEN` to the token you
    generated above.
 2. Commit and push.
 3. In the repo's GitHub **Settings → Pages**, set Source to "Deploy from a
@@ -236,7 +283,7 @@ that's your backend.
 ### Verify the deployed backend
 
 ```sh
-SERVICE_URL="https://nanny-xxxxx-ue.a.run.app"  # from step 1
+SERVICE_URL="https://nanny-xxxxx-ue.a.run.app"  # from step 2
 
 curl -s -X POST "$SERVICE_URL/api/quick-tap" \
   -H 'Content-Type: application/json' \
@@ -245,75 +292,25 @@ curl -s -X POST "$SERVICE_URL/api/quick-tap" \
   -d '{"activity_type":"bottle","quantity":4,"unit":"oz","notes":""}'
 ```
 
-That's a complete deployment. Everything past this point is optional and
-only matters if you plan to redeploy or keep this running long-term.
+### Why this survives restarts
 
-### Optional, later version: durability across restarts
-
-For a one-time deploy this doesn't matter — skip it. It becomes relevant if
-you start redeploying regularly or running this long-term, since Cloud Run
-can recycle a container on its own even without an explicit redeploy (idle
-scale-to-zero + cold start, platform maintenance, a crash) — `--min-instances=1`
-above makes that rare, not impossible. Two different things reset in that
-case:
-
-- **The activity log** (`data/<client-id>.jsonl`, one file per visitor) —
-  resets because Cloud Run's filesystem is ephemeral per instance. Fixing
-  this for real means migrating `nanny/store.py` to a real database — out of
-  scope here.
-- **ADK session state** (the conversation flow between nodes, not the
-  activity log) — lives in memory by default and resets the same way.
-  Setting `NANNY_DB_URL` switches to `DatabaseSessionService`, backed by a
-  real database, so *this part* survives a restart (verified locally with a
-  SQLite file across a simulated restart — see this repo's test suite):
-
-```sh
-gcloud services enable sqladmin.googleapis.com --project "$GOOGLE_CLOUD_PROJECT"
-
-gcloud sql instances create nanny-db \
-  --project "$GOOGLE_CLOUD_PROJECT" \
-  --database-version=POSTGRES_16 \
-  --tier=db-f1-micro \
-  --region="$GOOGLE_CLOUD_LOCATION"
-
-gcloud sql databases create nanny --instance=nanny-db --project "$GOOGLE_CLOUD_PROJECT"
-
-export NANNY_DB_PASSWORD=$(openssl rand -hex 16)
-gcloud sql users set-password postgres --instance=nanny-db \
-  --project "$GOOGLE_CLOUD_PROJECT" --password="$NANNY_DB_PASSWORD"
-
-printf '%s' "$NANNY_DB_PASSWORD" | gcloud secrets create nanny-db-password \
-  --project "$GOOGLE_CLOUD_PROJECT" --data-file=- \
-  || printf '%s' "$NANNY_DB_PASSWORD" | gcloud secrets versions add nanny-db-password \
-  --project "$GOOGLE_CLOUD_PROJECT" --data-file=-
-
-export CONNECTION_NAME=$(gcloud sql instances describe nanny-db \
-  --project "$GOOGLE_CLOUD_PROJECT" --format='value(connectionName)')
-```
-
-Then add these flags to the `gcloud run deploy` command in step 1:
-
-```sh
-  --add-cloudsql-instances="$CONNECTION_NAME" \
-  --set-secrets="NANNY_DB_PASSWORD=nanny-db-password:latest" \
-  --set-env-vars="...,NANNY_DB_URL=postgresql+asyncpg://postgres:REPLACE_AT_RUNTIME@/nanny?host=/cloudsql/${CONNECTION_NAME}"
-```
-
-`DatabaseSessionService` uses SQLAlchemy's *async* engine, so the driver
-matters: this repo's `db` extra installs `asyncpg` (Postgres, async) rather
-than `pg8000`/`psycopg2` (sync-only, will not work here). Since
-`--set-env-vars` can't reference a secret directly, either bake the password
-into `NANNY_DB_URL` via `--set-secrets` on that exact env var instead of a
-separate `NANNY_DB_PASSWORD`, or fetch the secret and interpolate it into the
-URL before running `gcloud run deploy`. `google-adk[db]` + `asyncpg` are
-already in the container image (see `Dockerfile`) whether or not you set
-`NANNY_DB_URL` — it's a no-op if you don't.
+Cloud Run's filesystem is ephemeral per instance (idle scale-to-zero + cold
+start, platform maintenance, a crash can all recycle a container even with
+`--min-instances=1`), and the activity log (`data/<client-id>.jsonl`, one
+file per visitor) still resets when that happens — fixing that for real
+means migrating `nanny/store.py` to a real database, out of scope here. ADK
+session state (the conversation flow between nodes, not the activity log) is
+the part Agent Runtime fixes: it defaults to `VertexAiSessionService` when
+deployed, a real managed backend, so a Cloud Run container recycling no
+longer wipes an in-flight conversation — that's the problem this migration
+was for.
 
 ### Local dev is unaffected
 
-`NANNY_API_TOKEN`, `NANNY_ALLOWED_ORIGINS`, and `NANNY_DB_URL` are all
-opt-in — unset, `uv run main.py` behaves exactly as before: no auth, no CORS
-headers, in-memory sessions. `X-Nanny-Client-Id` isn't opt-in, but is
-backward compatible — requests without it (like the `curl` examples earlier
-in this README) fall back to one shared `"default"` id, matching the
-original single-user behavior.
+`NANNY_API_TOKEN`, `NANNY_ALLOWED_ORIGINS`, and `NANNY_AGENT_ENGINE_RESOURCE_NAME`
+are all opt-in — unset, `uv run main.py` behaves exactly as before: no auth,
+no CORS headers, in-process graph, in-memory sessions, no GCP credentials
+needed. `X-Nanny-Client-Id` isn't opt-in, but is backward compatible —
+requests without it (like the `curl` examples earlier in this README) fall
+back to one shared `"default"` id, matching the original single-user
+behavior.

@@ -7,14 +7,15 @@ COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /usr/local/bin/
 WORKDIR /app
 
 # Install dependencies first so this layer is cached across code-only changes.
-# --extra db bundles asyncpg + google-adk[db] so NANNY_DB_URL (DatabaseSessionService)
-# works out of the box; it's a no-op if you never set that env var.
+# --extra agent-engine bundles google-adk[gcp] (vertexai.agent_engines) so
+# NANNY_AGENT_ENGINE_RESOURCE_NAME works out of the box; it's a no-op if you
+# never set that env var (the dashboard runs the graph in-process instead).
 COPY pyproject.toml uv.lock ./
-RUN uv sync --frozen --no-install-project --no-dev --extra db
+RUN uv sync --frozen --no-install-project --no-dev --extra agent-engine
 
 # Now copy the rest of the app (nanny/, web/, skills/, main.py) and install it.
 COPY . .
-RUN uv sync --frozen --no-dev --extra db
+RUN uv sync --frozen --no-dev --extra agent-engine
 
 ENV PATH="/app/.venv/bin:${PATH}"
 # Cloud Run's ephemeral filesystem resets on restart/redeploy — see README's
