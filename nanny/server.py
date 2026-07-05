@@ -14,7 +14,8 @@ import os
 from datetime import UTC, datetime
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, Header, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from google.adk.runners import Runner
@@ -38,6 +39,29 @@ DATA_PATH = os.environ.get(
     "NANNY_DATA_PATH",
     str(Path(__file__).resolve().parent.parent / "data" / "activity_log.jsonl"),
 )
+
+# Both are opt-in via env var and off by default, so local (same-origin,
+# single-user) usage is unaffected. Set them once this server is reachable
+# from the public internet (e.g. Cloud Run) rather than only from localhost:
+#
+# - NANNY_ALLOWED_ORIGINS: comma-separated origins allowed to call the API
+#   cross-origin (e.g. a GitHub Pages frontend on a different domain).
+# - NANNY_API_TOKEN: if set, POST /api/quick-tap and /api/chat require an
+#   `X-Nanny-Token` header matching this value. This app has a single shared
+#   session/activity log with no per-user auth, so anyone who can reach a
+#   public URL can read and append to it — this token is a low-effort guard
+#   against random internet traffic, not real multi-tenant access control.
+_ALLOWED_ORIGINS = [
+    o.strip()
+    for o in os.environ.get("NANNY_ALLOWED_ORIGINS", "").split(",")
+    if o.strip()
+]
+_API_TOKEN = os.environ.get("NANNY_API_TOKEN")
+
+
+async def _require_api_token(x_nanny_token: str | None = Header(default=None)) -> None:
+    if _API_TOKEN and x_nanny_token != _API_TOKEN:
+        raise HTTPException(401, "missing or invalid X-Nanny-Token header")
 
 
 class QuickTapRequest(BaseModel):
@@ -66,6 +90,14 @@ session_service = InMemorySessionService()
 runner = Runner(app=adk_app, session_service=session_service)
 
 app = FastAPI(title="Nanny")
+
+if _ALLOWED_ORIGINS:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=_ALLOWED_ORIGINS,
+        allow_methods=["GET", "POST"],
+        allow_headers=["Content-Type", "X-Nanny-Token"],
+    )
 
 
 async def _ensure_session():
@@ -107,7 +139,11 @@ async def _run_turn(state_delta: dict, display_text: str) -> TurnResponse:
     )
 
 
-@app.post("/api/quick-tap", response_model=TurnResponse)
+@app.post(
+    "/api/quick-tap",
+    response_model=TurnResponse,
+    dependencies=[Depends(_require_api_token)],
+)
 async def quick_tap(req: QuickTapRequest) -> TurnResponse:
     if req.activity_type not in KNOWN_ACTIVITY_TYPES:
         raise HTTPException(
@@ -135,7 +171,9 @@ async def quick_tap(req: QuickTapRequest) -> TurnResponse:
     )
 
 
-@app.post("/api/chat", response_model=TurnResponse)
+@app.post(
+    "/api/chat", response_model=TurnResponse, dependencies=[Depends(_require_api_token)]
+)
 async def chat(req: ChatRequest) -> TurnResponse:
     if not req.text.strip():
         raise HTTPException(400, "text must not be empty")

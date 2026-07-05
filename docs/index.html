@@ -1,9 +1,24 @@
+<!--
+  GitHub Pages copy of ../web/index.html.
+
+  This is a static mirror, not the source of truth — if you change
+  web/index.html, re-apply those changes here too (see README's Deployment
+  section). The only difference from web/index.html is the config block
+  right below: it points this page at a separately-hosted Cloud Run backend
+  instead of assuming same-origin relative paths.
+-->
 <!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>Nanny — Baby Activity Tracker</title>
+<script>
+  // Fill these in after `gcloud run deploy` prints your service URL.
+  window.NANNY_API_BASE = "https://REPLACE-WITH-YOUR-CLOUD-RUN-URL.a.run.app";
+  // Only needed if you deployed with NANNY_API_TOKEN set (see README).
+  window.NANNY_API_TOKEN = "";
+</script>
 <style>
   :root {
     color-scheme: light dark;
@@ -42,6 +57,14 @@
   }
   header h1 { margin: 0; font-size: 1.15rem; }
   header p { margin: 0.15rem 0 0; color: var(--muted); font-size: 0.85rem; }
+  .banner {
+    margin: 1rem 1.5rem 0;
+    padding: 0.6rem 0.9rem;
+    border-radius: 8px;
+    background: #c0554422;
+    border: 1px solid #c0554488;
+    font-size: 0.85rem;
+  }
   .layout {
     display: grid;
     grid-template-columns: 1fr;
@@ -140,6 +163,11 @@
   <h1>Nanny</h1>
   <p>Local baby activity tracker — quick-tap dashboard + AI chat, one shared log.</p>
 </header>
+<div class="banner" id="config-banner" hidden>
+  ⚠️ This page's NANNY_API_BASE still points at the placeholder URL — edit the
+  config block near the top of docs/index.html with your real Cloud Run
+  service URL.
+</div>
 <div class="layout">
   <section class="panel">
     <h2>Quick-Tap Controls</h2>
@@ -161,10 +189,12 @@
   </section>
 </div>
 <script>
-// Same-origin by default (served by nanny/server.py itself). Overridden by
-// docs/index.html (the GitHub Pages copy) to point at a Cloud Run backend.
 const API_BASE = window.NANNY_API_BASE || '';
 const API_TOKEN = window.NANNY_API_TOKEN || '';
+
+if (API_BASE.includes('REPLACE-WITH-YOUR-CLOUD-RUN-URL')) {
+  document.getElementById('config-banner').hidden = false;
+}
 
 const log = document.getElementById('log');
 
