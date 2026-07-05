@@ -169,6 +169,11 @@ with a static frontend on **GitHub Pages**. There's no Pub/Sub here — this
 app has no async/event-driven ingestion to decouple (unlike, say, an
 expense-report pipeline), so a topic wouldn't do anything for it.
 
+The steps below (deploy backend → point Pages at it) are everything needed
+for a one-time deploy. Skip straight to "Optional, later version" only if
+you specifically want state to survive a restart — it isn't required to get
+a working deployment.
+
 ### Per-visitor isolation
 
 Each browser gets its own id (`X-Nanny-Client-Id`, a UUID generated once by
@@ -178,65 +183,6 @@ share one conversation or one set of running totals. `NANNY_API_TOKEN` is
 still a single shared secret, though: it's a low-effort gate against random
 internet traffic (not per-user auth) — anyone with the token can create as
 many isolated client ids as they want.
-
-### Known limitation: the activity log is not durable across deploys
-
-Cloud Run's filesystem is ephemeral per instance. Each visitor's
-`data/<client-id>.jsonl` survives fine across requests to the *same* warm
-instance, but resets on a new revision, a cold restart, or if it ever scales
-beyond one instance. The commands below pin `--min-instances=1
---max-instances=1` to make that reasonably stable for a demo, but a redeploy
-still wipes it. If you want real durability for the activity records
-themselves, migrate `nanny/store.py` to a real database — out of scope here.
-
-### Optional: durable session state via Cloud SQL
-
-By default ADK session state (the conversation flow between nodes — not the
-activity log above) lives in memory and is lost on restart just like the
-JSON files. Setting `NANNY_DB_URL` switches to `DatabaseSessionService`,
-backed by a real database, so that part survives:
-
-```sh
-gcloud services enable sqladmin.googleapis.com --project "$GOOGLE_CLOUD_PROJECT"
-
-gcloud sql instances create nanny-db \
-  --project "$GOOGLE_CLOUD_PROJECT" \
-  --database-version=POSTGRES_16 \
-  --tier=db-f1-micro \
-  --region="$GOOGLE_CLOUD_LOCATION"
-
-gcloud sql databases create nanny --instance=nanny-db --project "$GOOGLE_CLOUD_PROJECT"
-
-export NANNY_DB_PASSWORD=$(openssl rand -hex 16)
-gcloud sql users set-password postgres --instance=nanny-db \
-  --project "$GOOGLE_CLOUD_PROJECT" --password="$NANNY_DB_PASSWORD"
-
-printf '%s' "$NANNY_DB_PASSWORD" | gcloud secrets create nanny-db-password \
-  --project "$GOOGLE_CLOUD_PROJECT" --data-file=- \
-  || printf '%s' "$NANNY_DB_PASSWORD" | gcloud secrets versions add nanny-db-password \
-  --project "$GOOGLE_CLOUD_PROJECT" --data-file=-
-
-export CONNECTION_NAME=$(gcloud sql instances describe nanny-db \
-  --project "$GOOGLE_CLOUD_PROJECT" --format='value(connectionName)')
-```
-
-Then add these flags to the `gcloud run deploy` command below:
-
-```sh
-  --add-cloudsql-instances="$CONNECTION_NAME" \
-  --set-secrets="NANNY_DB_PASSWORD=nanny-db-password:latest" \
-  --set-env-vars="...,NANNY_DB_URL=postgresql+asyncpg://postgres:REPLACE_AT_RUNTIME@/nanny?host=/cloudsql/${CONNECTION_NAME}"
-```
-
-`DatabaseSessionService` uses SQLAlchemy's *async* engine, so the driver
-matters: this repo's `db` extra installs `asyncpg` (Postgres, async) rather
-than `pg8000`/`psycopg2` (sync-only, will not work here). Since
-`--set-env-vars` can't reference a secret directly, either bake the password
-into `NANNY_DB_URL` via `--set-secrets` on that exact env var instead of a
-separate `NANNY_DB_PASSWORD`, or fetch the secret and interpolate it into the
-URL before running `gcloud run deploy`. `google-adk[db]` + `asyncpg` are
-already in the container image (see `Dockerfile`) whether or not you set
-`NANNY_DB_URL` — it's a no-op if you don't.
 
 ### 1. Deploy the backend to Cloud Run
 
@@ -298,6 +244,70 @@ curl -s -X POST "$SERVICE_URL/api/quick-tap" \
   -H "X-Nanny-Client-Id: smoke-test" \
   -d '{"activity_type":"bottle","quantity":4,"unit":"oz","notes":""}'
 ```
+
+That's a complete deployment. Everything past this point is optional and
+only matters if you plan to redeploy or keep this running long-term.
+
+### Optional, later version: durability across restarts
+
+For a one-time deploy this doesn't matter — skip it. It becomes relevant if
+you start redeploying regularly or running this long-term, since Cloud Run
+can recycle a container on its own even without an explicit redeploy (idle
+scale-to-zero + cold start, platform maintenance, a crash) — `--min-instances=1`
+above makes that rare, not impossible. Two different things reset in that
+case:
+
+- **The activity log** (`data/<client-id>.jsonl`, one file per visitor) —
+  resets because Cloud Run's filesystem is ephemeral per instance. Fixing
+  this for real means migrating `nanny/store.py` to a real database — out of
+  scope here.
+- **ADK session state** (the conversation flow between nodes, not the
+  activity log) — lives in memory by default and resets the same way.
+  Setting `NANNY_DB_URL` switches to `DatabaseSessionService`, backed by a
+  real database, so *this part* survives a restart (verified locally with a
+  SQLite file across a simulated restart — see this repo's test suite):
+
+```sh
+gcloud services enable sqladmin.googleapis.com --project "$GOOGLE_CLOUD_PROJECT"
+
+gcloud sql instances create nanny-db \
+  --project "$GOOGLE_CLOUD_PROJECT" \
+  --database-version=POSTGRES_16 \
+  --tier=db-f1-micro \
+  --region="$GOOGLE_CLOUD_LOCATION"
+
+gcloud sql databases create nanny --instance=nanny-db --project "$GOOGLE_CLOUD_PROJECT"
+
+export NANNY_DB_PASSWORD=$(openssl rand -hex 16)
+gcloud sql users set-password postgres --instance=nanny-db \
+  --project "$GOOGLE_CLOUD_PROJECT" --password="$NANNY_DB_PASSWORD"
+
+printf '%s' "$NANNY_DB_PASSWORD" | gcloud secrets create nanny-db-password \
+  --project "$GOOGLE_CLOUD_PROJECT" --data-file=- \
+  || printf '%s' "$NANNY_DB_PASSWORD" | gcloud secrets versions add nanny-db-password \
+  --project "$GOOGLE_CLOUD_PROJECT" --data-file=-
+
+export CONNECTION_NAME=$(gcloud sql instances describe nanny-db \
+  --project "$GOOGLE_CLOUD_PROJECT" --format='value(connectionName)')
+```
+
+Then add these flags to the `gcloud run deploy` command in step 1:
+
+```sh
+  --add-cloudsql-instances="$CONNECTION_NAME" \
+  --set-secrets="NANNY_DB_PASSWORD=nanny-db-password:latest" \
+  --set-env-vars="...,NANNY_DB_URL=postgresql+asyncpg://postgres:REPLACE_AT_RUNTIME@/nanny?host=/cloudsql/${CONNECTION_NAME}"
+```
+
+`DatabaseSessionService` uses SQLAlchemy's *async* engine, so the driver
+matters: this repo's `db` extra installs `asyncpg` (Postgres, async) rather
+than `pg8000`/`psycopg2` (sync-only, will not work here). Since
+`--set-env-vars` can't reference a secret directly, either bake the password
+into `NANNY_DB_URL` via `--set-secrets` on that exact env var instead of a
+separate `NANNY_DB_PASSWORD`, or fetch the secret and interpolate it into the
+URL before running `gcloud run deploy`. `google-adk[db]` + `asyncpg` are
+already in the container image (see `Dockerfile`) whether or not you set
+`NANNY_DB_URL` — it's a no-op if you don't.
 
 ### Local dev is unaffected
 
