@@ -38,6 +38,12 @@ agent-engine = [
 research = [
     "google-adk[mcp]>=2.3.0",
 ]
+# Needed only for the opt-in server-side speech-to-text fallback
+# (nanny/speech.py, NANNY_STT_ENABLED). The mic button's default engine is the
+# browser's free Web Speech API, which needs nothing here.
+speech = [
+    "google-cloud-speech>=2.27.0",
+]
 
 [tool.ruff]
 line-length = 88
