@@ -271,6 +271,37 @@ consumer API today.)
 > reference, then ask an insights question it should answer, and confirm the
 > citation.
 
+## Speak to log (hands-free driving mode)
+
+A 🎤 button in the chat row lets you *speak* a log — "he pooped at 3", "four
+ounce bottle" — instead of typing. Speech flows straight into the same
+`/api/chat` classifier that already turns free text into a structured record,
+and on a voice turn the confirmation is read back aloud (browser
+text-to-speech), so you can log without looking — like Google Maps.
+
+Two engines, layered:
+
+1. **Browser Web Speech API** (default) — free, no backend, no keys. Press,
+   speak, pause; it auto-sends. Works in Chrome/Edge/Safari (not Firefox).
+2. **Cloud Speech-to-Text** (opt-in fallback, `NANNY_STT_ENABLED`) — for
+   browsers without Web Speech: the mic records audio and POSTs it to
+   `POST /api/transcribe`, which calls Google Cloud Speech-to-Text
+   (`nanny/speech.py`) with the deployment's service account, then returns the
+   transcript. Enable it with `NANNY_STT_ENABLED=true`, install the `speech`
+   extra (`uv sync --extra speech`, adds `google-cloud-speech`), enable the
+   Speech-to-Text API, and grant the service account access. `GET /api/transcribe`
+   reports `{ "enabled": … }` so the frontend only uses this path when it's on.
+
+If neither engine is available the mic button simply stays hidden and typing
+works as before. The mic and speech APIs require a **secure context** (HTTPS or
+`localhost`) — local dev, GitHub Pages, and Cloud Run all qualify.
+
+> The browser Web Speech path needs no server and can't be exercised in this
+> repo's sandbox (the open-source Chromium here has no speech backend), and the
+> Cloud Speech-to-Text fallback needs GCP credentials — both are validated on a
+> real browser/phone. The `/api/transcribe` endpoint's gating and flow are
+> covered by `tests/test_speech.py` (which mocks the Google client).
+
 ## Development
 
 ```sh
