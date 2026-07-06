@@ -149,6 +149,29 @@
   }
   button.insight:hover { background: var(--accent); color: var(--accent-ink); }
   .disclaimer { font-size: 0.72rem; color: var(--muted); margin: 0.6rem 0 0; }
+  @media (min-width: 800px) {
+    .refs-panel { grid-column: 1 / -1; }
+  }
+  .refs-hint { font-size: 0.8rem; color: var(--muted); margin: 0 0 0.75rem; }
+  ul.refs-list { list-style: none; margin: 0 0 0.75rem; padding: 0; display: flex; flex-direction: column; gap: 0.4rem; }
+  ul.refs-list li {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 0.5rem; padding: 0.5rem 0.7rem;
+    background: var(--bubble); border-radius: 8px; font-size: 0.9rem;
+  }
+  ul.refs-list li.refs-empty { color: var(--muted); background: none; padding-left: 0; }
+  button.refs-remove {
+    appearance: none; border: none; background: none; cursor: pointer;
+    color: var(--muted); font-size: 1rem; line-height: 1; padding: 0 0.25rem;
+  }
+  button.refs-remove:hover { color: var(--accent); }
+  form.refs-form { display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; }
+  form.refs-form input[type=file] { flex: 1; font-size: 0.85rem; color: var(--ink); }
+  form.refs-form button {
+    border: none; background: var(--accent); color: var(--accent-ink);
+    border-radius: 8px; padding: 0.5rem 1rem; cursor: pointer; font-size: 0.9rem;
+  }
+  .refs-status { font-size: 0.78rem; color: var(--muted); margin: 0.5rem 0 0; min-height: 1em; }
 </style>
 </head>
 <body>
@@ -186,6 +209,16 @@
       <button type="submit">Ask</button>
     </form>
     <p class="disclaimer">General information grounded in reputable guidance (CDC, AAP, WHO, UNICEF) — not medical advice. Discuss anything that concerns you with your pediatrician.</p>
+  </section>
+  <section class="panel refs-panel" id="refs-panel" hidden>
+    <h2>Your References</h2>
+    <p class="refs-hint">Upload your own parenting references (PDF, text, or Markdown) — the insights assistant will draw on them for you, alongside the built-in guidance. Only you can see your own references.</p>
+    <ul class="refs-list" id="refs-list"></ul>
+    <form class="refs-form" id="refs-form">
+      <input id="refs-file" type="file" accept=".txt,.md,.pdf" />
+      <button type="submit">Upload</button>
+    </form>
+    <p class="refs-status" id="refs-status"></p>
   </section>
 </div>
 <script>
@@ -313,6 +346,93 @@ document.getElementById('insights-form').addEventListener('submit', (e) => {
   input.disabled = true;
   requestInsight(question).finally(() => { input.disabled = false; input.focus(); });
 });
+
+// Your References: the parent's own RAG corpus. The panel is hidden unless the
+// backend reports the feature enabled (NANNY_RAG_ENABLED, a Vertex deploy), so
+// local/default runs show nothing.
+const refsPanel = document.getElementById('refs-panel');
+const refsList = document.getElementById('refs-list');
+const refsStatus = document.getElementById('refs-status');
+
+function authHeaders(extra) {
+  const headers = Object.assign({ 'X-Nanny-Client-Id': CLIENT_ID }, extra || {});
+  if (API_TOKEN) headers['X-Nanny-Token'] = API_TOKEN;
+  return headers;
+}
+
+function renderRefs(files) {
+  refsList.innerHTML = '';
+  if (!files.length) {
+    const li = document.createElement('li');
+    li.className = 'refs-empty';
+    li.textContent = 'No references uploaded yet.';
+    refsList.appendChild(li);
+    return;
+  }
+  files.forEach((name) => {
+    const li = document.createElement('li');
+    const span = document.createElement('span');
+    span.textContent = name;
+    li.appendChild(span);
+    const btn = document.createElement('button');
+    btn.className = 'refs-remove';
+    btn.title = 'Remove';
+    btn.textContent = '✕';
+    btn.addEventListener('click', () => removeReference(name));
+    li.appendChild(btn);
+    refsList.appendChild(li);
+  });
+}
+
+async function loadReferences() {
+  try {
+    const res = await fetch(API_BASE + '/api/corpus', { headers: authHeaders() });
+    const data = await res.json();
+    if (!data.enabled) { refsPanel.hidden = true; return; }
+    refsPanel.hidden = false;
+    renderRefs(data.files || []);
+  } catch (err) {
+    refsPanel.hidden = true;
+  }
+}
+
+async function removeReference(name) {
+  refsStatus.textContent = 'Removing…';
+  try {
+    const res = await fetch(API_BASE + '/api/corpus/' + encodeURIComponent(name), {
+      method: 'DELETE', headers: authHeaders(),
+    });
+    if (!res.ok) throw new Error('Remove failed');
+    refsStatus.textContent = '';
+    loadReferences();
+  } catch (err) {
+    refsStatus.textContent = 'Error: ' + err.message;
+  }
+}
+
+document.getElementById('refs-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const input = document.getElementById('refs-file');
+  if (!input.files.length) return;
+  const form = new FormData();
+  form.append('file', input.files[0]);
+  refsStatus.textContent = 'Uploading…';
+  try {
+    // No Content-Type header: the browser sets the multipart boundary itself.
+    const res = await fetch(API_BASE + '/api/corpus', {
+      method: 'POST', headers: authHeaders(), body: form,
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.detail || 'Upload failed');
+    refsStatus.textContent = 'Uploaded.';
+    input.value = '';
+    loadReferences();
+  } catch (err) {
+    refsStatus.textContent = 'Error: ' + err.message;
+  }
+});
+
+loadReferences();
 </script>
 </body>
 </html>

@@ -193,7 +193,7 @@ baby's own activity, it answers questions ("is my baby feeding enough?") and,
 when asked with no question, proactively surfaces the most useful observation —
 always grounded and cited, never diagnostic.
 
-It layers three sources, so it's useful with nothing configured and richer as
+It layers four sources, so it's useful with nothing configured and richer as
 you add credentials (the same opt-in philosophy as `NANNY_API_TOKEN`):
 
 1. **Curated `child-guidance` skill** (always on, offline) — original,
@@ -207,9 +207,10 @@ you add credentials (the same opt-in philosophy as `NANNY_API_TOKEN`):
    healthychildren.org, who.int, unicef.org). Set `GOOGLE_CSE_ID` +
    `GOOGLE_CSE_API_KEY`. (ADK's built-in `google_search` is model-side
    grounding and can't be reliably domain-restricted, which is why this uses a
-   CSE.) A parent-controlled Vertex AI RAG corpus / NotebookLM Enterprise
-   notebook is the natural next extension here — NotebookLM has no supported
-   consumer API today, so it's noted as a future hook rather than built in.
+   CSE.)
+4. **The parent's own references** (opt-in, `NANNY_RAG_ENABLED`) — a
+   per-parent Vertex AI RAG corpus they upload to themselves. See
+   [Bring your own references](#bring-your-own-references-rag) below.
 
 With none of the opt-in tools configured (and no API key at all), the agent
 still answers from the log summary + the curated skill via a deterministic
@@ -228,6 +229,47 @@ build-time TODO to confirm the UNICEF license before quoting it.
 **Not medical advice.** Insights are general information framed as "patterns to
 discuss with your pediatrician," never a diagnosis; parent questions are
 screened by the same security guardrail as chat before reaching the model.
+
+## Bring your own references (RAG)
+
+Beyond the shared `child-guidance` default, each parent can upload **their own**
+reference materials (their copy of a parenting book, a pediatrician's handout)
+that the InsightsAgent then retrieves from — the NotebookLM idea, built on
+Vertex AI RAG. It's the same per-visitor isolation as the activity log: each
+`X-Nanny-Client-Id` gets its own managed corpus, and only that parent sees or
+searches their own references.
+
+This is **opt-in and off by default** (`NANNY_RAG_ENABLED`). Unset — local dev,
+tests, this sandbox — the "Your References" panel is hidden, `GET /api/corpus`
+reports `enabled: false`, and the InsightsAgent runs on the bundled skill
+exactly as before. Set it (a Vertex deployment) and the feature lights up:
+
+- `POST /api/corpus` (multipart file) — upload a `.txt`, `.md`, or `.pdf`;
+  Vertex RAG parses all three natively, so no local extraction is needed.
+- `GET /api/corpus` — list this parent's uploaded references.
+- `DELETE /api/corpus/{filename}` — remove one.
+
+Two Vertex-touching surfaces, each with its own service-account credentials:
+corpus management runs in the dashboard (`nanny/corpus.py`, called from
+`nanny/server.py`), and retrieval runs inside the agent via a per-client tool
+(`_PerClientRagRetrieval` in `nanny/research.py`) that scopes to the caller's
+corpus. Both need `roles/aiplatform.user` (the dashboard already has it from the
+Agent Runtime setup) and resolve the same corpus by a deterministic display
+name, so no shared state is stored.
+
+Enabling it on a deploy: add `NANNY_RAG_ENABLED=true` to **both** the Agent
+Runtime deploy and the Cloud Run dashboard's `--set-env-vars`, and grant the
+Agent Runtime service account `roles/aiplatform.user` too. Because Vertex RAG
+provisions a managed corpus per parent, **licensing becomes the parent's
+concern** — they upload their own copy of a book, exactly like NotebookLM.
+(NotebookLM Enterprise could feed the same corpus later; it has no supported
+consumer API today.)
+
+> Like the rest of the Vertex path, none of this is runnable in this repo's
+> sandbox (no GCP credentials); the corpus logic is covered by tests that mock
+> `vertexai.rag`, and the real path is validated on deploy — upload a small
+> reference, then ask an insights question it should answer, and confirm the
+> citation.
 
 ## Development
 
