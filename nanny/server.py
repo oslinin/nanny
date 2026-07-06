@@ -110,6 +110,11 @@ class ChatRequest(BaseModel):
     text: str
 
 
+class InsightsRequest(BaseModel):
+    # Empty question ⇒ proactive mode: the agent surfaces its own observation.
+    question: str = ""
+
+
 class TurnResponse(BaseModel):
     ok: bool
     response_text: str
@@ -308,6 +313,43 @@ async def chat(req: ChatRequest, client_id: str = Depends(_client_id)) -> TurnRe
 async def history(client_id: str = Depends(_client_id)) -> list[dict]:
     final_state = await _query(client_id, {"input_mode": "get_history"}, "history")
     return final_state.get("history") or []
+
+
+@app.post(
+    "/api/insights",
+    response_model=TurnResponse,
+    dependencies=[Depends(_require_api_token)],
+)
+async def insights(
+    req: InsightsRequest, client_id: str = Depends(_client_id)
+) -> TurnResponse:
+    """Evidence-grounded insights over this client's log.
+
+    An empty question is proactive mode (the agent surfaces its own
+    observation); a non-empty one is answered. Rides the same
+    ``_run_turn``/backend path as chat, so it works identically whether the
+    graph runs in-process or on Agent Runtime.
+    """
+    now_iso = datetime.now(UTC).astimezone().isoformat()
+    display = req.question.strip() or "[insights] what do the patterns say?"
+    final_state = await _query(
+        client_id,
+        {"input_mode": "insights", "question": req.question, "now_iso": now_iso},
+        display,
+    )
+    # Insights logs nothing, so unlike chat/quick-tap it must NOT surface the
+    # activity/save_result still sitting in the persistent session state from
+    # an earlier turn — only the generated text is about this turn.
+    if final_state.get("last_status") != "ok":
+        return TurnResponse(
+            ok=False,
+            response_text=final_state.get("response_text", "Something went wrong."),
+        )
+    return TurnResponse(
+        ok=True,
+        response_text=final_state.get("response_text", ""),
+        used_llm_response=final_state.get("used_llm_response"),
+    )
 
 
 @app.get("/")
