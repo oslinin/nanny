@@ -23,6 +23,15 @@ def _reload_server(tmp_path, monkeypatch, **env):
     monkeypatch.setenv("NANNY_DATA_DIR", str(tmp_path))
     for key, value in env.items():
         monkeypatch.setenv(key, value)
+
+    # nanny.stores caches DATA_DIR and per-client Store instances at module
+    # level; reloading only nanny.server would leave both stale (pointing at
+    # a previous test's tmp_path), so reload stores first — server.py's
+    # `from .stores import get_store` then picks up the fresh function.
+    import nanny.stores as stores_module
+
+    importlib.reload(stores_module)
+
     import nanny.server as server_module
 
     importlib.reload(server_module)
@@ -138,44 +147,69 @@ def test_malformed_client_id_falls_back_to_default(tmp_path, monkeypatch):
     assert not (tmp_path.parent.parent / "etc" / "passwd.jsonl").exists()
 
 
-def test_database_session_service_used_when_db_url_configured(tmp_path, monkeypatch):
-    db_path = tmp_path / "sessions.db"
+class _FakeAgentEngine:
+    """Stands in for a deployed Agent Runtime resource / local AdkApp.
+
+    Mirrors just enough of the real ``async_stream_query`` /
+    ``async_get_session`` / ``async_create_session`` contract (confirmed by
+    reading vertexai's AdkApp/AgentEngine source) to exercise
+    ``_AgentRuntimeBackend`` without any real GCP credentials or network
+    access — neither of which this sandbox has.
+    """
+
+    def __init__(self):
+        self.sessions: dict[str, dict] = {}
+        self.calls: list[tuple] = []
+
+    async def async_create_session(self, *, user_id, session_id, state=None, **kwargs):
+        self.sessions[session_id] = {"id": session_id, "state": dict(state or {})}
+        return self.sessions[session_id]
+
+    async def async_get_session(self, *, user_id, session_id, **kwargs):
+        return self.sessions.get(session_id)
+
+    async def async_stream_query(self, *, message, user_id, session_id, **kwargs):
+        state_delta = kwargs.get("state_delta") or {}
+        self.calls.append((message, user_id, session_id, state_delta))
+        session = self.sessions.setdefault(session_id, {"id": session_id, "state": {}})
+        session["state"].update(state_delta)
+        session["state"]["last_status"] = "ok"
+        session["state"]["response_text"] = "fake agent runtime response"
+        return
+        yield  # pragma: no cover - makes this an async generator
+
+
+def test_agent_runtime_backend_selected_when_resource_name_configured(
+    tmp_path, monkeypatch
+):
+    fake_engine = _FakeAgentEngine()
+    monkeypatch.setattr("vertexai.agent_engines.get", lambda resource_name: fake_engine)
     server_module = _reload_server(
-        tmp_path, monkeypatch, NANNY_DB_URL=f"sqlite+aiosqlite:///{db_path}"
+        tmp_path,
+        monkeypatch,
+        GOOGLE_CLOUD_PROJECT="fake-project",
+        NANNY_AGENT_ENGINE_RESOURCE_NAME="projects/fake/locations/us-east1/reasoningEngines/123",
     )
-    assert type(server_module.session_service).__name__ == "DatabaseSessionService"
+    assert type(server_module.backend).__name__ == "_AgentRuntimeBackend"
 
     client = TestClient(server_module.app)
     resp = client.post(
-        "/api/quick-tap", json=QUICK_TAP_BODY, headers={"X-Nanny-Client-Id": "carol"}
+        "/api/quick-tap", json=QUICK_TAP_BODY, headers={"X-Nanny-Client-Id": "erin"}
     )
     assert resp.status_code == 200
-    assert db_path.exists()
+    body = resp.json()
+    assert body["ok"] is True
+    assert body["response_text"] == "fake agent runtime response"
+
+    # The dashboard passed the request through to the (fake) deployed agent
+    # rather than running the graph in-process.
+    assert len(fake_engine.calls) == 1
+    _message, user_id, session_id, state_delta = fake_engine.calls[0]
+    assert user_id == session_id == "erin"
+    assert state_delta["input_mode"] == "quick_tap"
+    assert state_delta["client_id"] == "erin"
 
 
-def test_session_state_survives_reload_with_same_db_url(tmp_path, monkeypatch):
-    # Simulates a Cloud Run restart: a brand-new server_module (and therefore
-    # a brand-new DatabaseSessionService instance) pointed at the same
-    # database must still see state written before the "restart".
-    db_path = tmp_path / "sessions.db"
-    db_url = f"sqlite+aiosqlite:///{db_path}"
-
-    server_module = _reload_server(tmp_path, monkeypatch, NANNY_DB_URL=db_url)
-    client = TestClient(server_module.app)
-    client.post(
-        "/api/quick-tap", json=QUICK_TAP_BODY, headers={"X-Nanny-Client-Id": "dave"}
-    )
-
-    # Reload again with the identical env — a fresh session_service/runner,
-    # standing in for a fresh container instance after a restart.
-    restarted_module = _reload_server(tmp_path, monkeypatch, NANNY_DB_URL=db_url)
-    restarted_client = TestClient(restarted_module.app)
-    resp = restarted_client.post(
-        "/api/chat",
-        json={"text": "he pooped at 3"},
-        headers={"X-Nanny-Client-Id": "dave"},
-    )
-    assert resp.status_code == 200
-    # If the prior session's state hadn't survived, last_status would be
-    # missing entirely rather than resolving through the graph normally.
-    assert resp.json()["ok"] is True
+def test_local_backend_selected_by_default(tmp_path, monkeypatch):
+    server_module = _reload_server(tmp_path, monkeypatch)
+    assert type(server_module.backend).__name__ == "_LocalRunnerBackend"
