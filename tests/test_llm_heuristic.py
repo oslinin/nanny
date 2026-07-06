@@ -1,9 +1,43 @@
 import pytest
 
 from nanny.activity import ActivityError
-from nanny.llm import _extract_heuristic
+from nanny.llm import _extract_heuristic, _model_available, _use_vertex
 
 NOW = "2026-07-05T20:00:00+00:00"
+
+
+def test_model_available_via_api_key(monkeypatch):
+    monkeypatch.delenv("GOOGLE_GENAI_USE_VERTEXAI", raising=False)
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+    monkeypatch.setenv("GEMINI_API_KEY", "sk-test")
+    assert _model_available() is True
+
+
+def test_model_available_via_vertex_backend(monkeypatch):
+    # On Vertex there is no API key — the service account (ADC) is the auth, and
+    # google-genai is selected via GOOGLE_GENAI_USE_VERTEXAI. The offline gate
+    # must recognize this as "a model is reachable", not force the offline path.
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+    monkeypatch.setenv("GOOGLE_GENAI_USE_VERTEXAI", "true")
+    monkeypatch.setenv("GOOGLE_CLOUD_PROJECT", "your-gcp-project-id")
+    assert _use_vertex() is True
+    assert _model_available() is True
+
+
+def test_vertex_flag_without_project_is_not_enough(monkeypatch):
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+    monkeypatch.setenv("GOOGLE_GENAI_USE_VERTEXAI", "true")
+    monkeypatch.delenv("GOOGLE_CLOUD_PROJECT", raising=False)
+    assert _use_vertex() is False
+
+
+def test_no_backend_means_offline(monkeypatch):
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+    monkeypatch.delenv("GOOGLE_GENAI_USE_VERTEXAI", raising=False)
+    assert _model_available() is False
 
 
 def test_extracts_poop_with_time_and_default_quantity():

@@ -7,6 +7,7 @@ requires-python = ">=3.11"
 dependencies = [
     "fastapi>=0.139.0",
     "google-adk>=2.3.0",
+    "python-multipart>=0.0.9",
     "uvicorn>=0.50.0",
 ]
 
@@ -15,11 +16,6 @@ dev = [
     "google-agents-cli>=1.0.0",
     "pytest>=9.1.1",
     "pytest-asyncio>=1.4.0",
-    # Needed to exercise DatabaseSessionService in tests: google-adk[db] for
-    # the class itself, aiosqlite as a lightweight async driver so tests
-    # don't need a real Postgres/Cloud SQL instance.
-    "google-adk[db]>=2.3.0",
-    "aiosqlite>=0.20.0",
 ]
 
 [project.optional-dependencies]
@@ -28,11 +24,19 @@ lint = [
     "ty>=0.0.1a0",
     "codespell>=2.2.0,<3.0.0",
 ]
-db = [
-    "google-adk[db]>=2.3.0",
-    # DatabaseSessionService uses SQLAlchemy's *async* engine, so this must
-    # be an async-capable driver — pg8000/psycopg2 (sync) will not work.
-    "asyncpg>=0.30.0",
+# Needed by nanny/agent_engine_app.py (deploy script + _AgentRuntimeBackend
+# in nanny/server.py). Bundled into the Cloud Run image unconditionally
+# (see Dockerfile) so NANNY_AGENT_ENGINE_RESOURCE_NAME works without a
+# separate image; a no-op if that env var is never set.
+agent-engine = [
+    "google-adk[gcp]>=2.3.0",
+]
+# Opt-in tools for the InsightsAgent (nanny/research.py). Only needed to enable
+# the Consensus MCP integration; the scoped-search tool uses the stdlib and the
+# curated child-guidance skill + offline fallback need nothing extra, so the
+# agent is fully functional without this extra installed.
+research = [
+    "google-adk[mcp]>=2.3.0",
 ]
 
 [tool.ruff]
@@ -54,6 +58,11 @@ ignore = ["E501", "C901", "B006"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["nanny"]
+
+[tool.ruff.lint.flake8-bugbear]
+# FastAPI's dependency-injection markers are calls-in-defaults by design; the
+# others are already special-cased by ruff, File(...) needs to be listed.
+extend-immutable-calls = ["fastapi.File"]
 
 [tool.ty]
 [tool.ty.environment]

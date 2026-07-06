@@ -15,13 +15,39 @@ from __future__ import annotations
 
 import os
 import re
+from collections import defaultdict
 from datetime import datetime, timedelta
 
 from .activity import ActivityError, BabyActivity
 
 
 def _has_api_key() -> bool:
+    """True when an AI-Studio (Gemini Developer API) key is configured."""
     return bool(os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY"))
+
+
+def _use_vertex() -> bool:
+    """True when google-genai is pointed at the Vertex AI backend.
+
+    On Vertex the model is reached through the service account (ADC), not an
+    API key — this is how it's authenticated when deployed to Agent Runtime
+    (the runtime sets ``GOOGLE_GENAI_USE_VERTEXAI`` and the project for us). We
+    mirror google-genai's own switch so the offline gate below doesn't mistake
+    "no API key" for "no model" in that environment.
+    """
+    val = os.environ.get("GOOGLE_GENAI_USE_VERTEXAI", "").strip().lower()
+    return val in ("1", "true", "yes") and bool(os.environ.get("GOOGLE_CLOUD_PROJECT"))
+
+
+def _model_available() -> bool:
+    """True when a real Gemini call can be made — via either backend.
+
+    The agents' offline fallbacks gate on this: without it (i.e. neither an API
+    key nor the Vertex backend configured) they serve a deterministic heuristic
+    instead of calling a model. Keying only on the API key would wrongly force
+    the offline path on a Vertex deployment, where there is no key by design.
+    """
+    return _has_api_key() or _use_vertex()
 
 
 _TYPE_KEYWORDS = {
@@ -128,3 +154,87 @@ def _fmt_num(n: float) -> str:
 
 def _unit_suffix(unit: str) -> str:
     return {"oz": "oz", "grams": "g", "count": ""}.get(unit, f" {unit}")
+
+
+def build_insights_context(activities: list[dict], *, now_iso: str) -> dict:
+    """Reduce the raw activity log to a compact, model-friendly summary.
+
+    Deterministic aggregation only — per-type counts and totals for today and
+    all-time, plus how many distinct days are logged — so the InsightsAgent
+    reasons over a small structured summary rather than the raw log, and so the
+    offline fallback below has something concrete to ground a reply in without
+    any model call.
+    """
+    today = now_iso[:10]
+    per_type_today: dict[str, dict] = defaultdict(
+        lambda: {"count": 0, "total": 0.0, "unit": ""}
+    )
+    per_type_all: dict[str, dict] = defaultdict(
+        lambda: {"count": 0, "total": 0.0, "unit": ""}
+    )
+    days: set[str] = set()
+    for a in activities:
+        atype = a.get("activity_type", "")
+        try:
+            qty = float(a.get("quantity", 0) or 0)
+        except (TypeError, ValueError):
+            qty = 0.0
+        unit = a.get("unit", "")
+        day = str(a.get("timestamp", ""))[:10]
+        if day:
+            days.add(day)
+        all_bucket = per_type_all[atype]
+        all_bucket["count"] += 1
+        all_bucket["total"] += qty
+        all_bucket["unit"] = unit
+        if today and day == today:
+            today_bucket = per_type_today[atype]
+            today_bucket["count"] += 1
+            today_bucket["total"] += qty
+            today_bucket["unit"] = unit
+    return {
+        "total_records": len(activities),
+        "days_logged": len(days),
+        "today": today,
+        "per_type_today": {k: dict(v) for k, v in per_type_today.items()},
+        "per_type_all_time": {k: dict(v) for k, v in per_type_all.items()},
+    }
+
+
+def _summarize_insights(context: dict, question: str) -> str:
+    """Deterministic, no-LLM insights reply used when no API key is configured.
+
+    Grounds the response in the actual logged summary and stays explicitly
+    non-diagnostic, mirroring the InsightsAgent's live instruction so the
+    offline path is a faithful (if plainer) stand-in rather than a different
+    contract.
+    """
+    total = context.get("total_records", 0)
+    if not total:
+        base = (
+            "There's nothing logged yet, so there are no patterns to look at. "
+            "Log a few feeds or diaper changes and check back."
+        )
+    else:
+        today = context.get("per_type_today", {})
+        parts = [
+            f"{b['count']} {atype} ({_fmt_num(b['total'])}{_unit_suffix(b['unit'])})"
+            if b["unit"] != "count"
+            else f"{b['count']} {atype}"
+            for atype, b in sorted(today.items())
+        ]
+        today_line = ", ".join(parts) if parts else "nothing logged yet today"
+        base = (
+            f"Across {total} logged record(s) over "
+            f"{context.get('days_logged', 0)} day(s), today so far: {today_line}."
+        )
+    disclaimer = (
+        " This is a plain summary of what you logged, not medical advice — for "
+        "anything that concerns you, discuss the patterns with your pediatrician."
+    )
+    if question and question.strip():
+        return (
+            "I can't reach the research tools right now, so here's what your own "
+            "log shows. " + base + disclaimer
+        )
+    return base + disclaimer

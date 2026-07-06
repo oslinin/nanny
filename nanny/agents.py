@@ -32,7 +32,7 @@ from google.genai import types
 from pydantic import BaseModel, Field
 
 from .activity import KNOWN_ACTIVITY_TYPES, KNOWN_UNITS, ActivityError
-from .llm import _extract_heuristic, _has_api_key, _synthesize_template
+from .llm import _extract_heuristic, _model_available, _synthesize_template
 from .security import screen_text
 
 logger = logging.getLogger("nanny.agents")
@@ -101,9 +101,9 @@ def _classifier_security_callback(callback_context, llm_request):
 
 
 def _classifier_offline_fallback_callback(callback_context, llm_request):
-    """Runs the heuristic extractor instead of calling Gemini when no API key
-    is configured."""
-    if _has_api_key():
+    """Runs the heuristic extractor instead of calling Gemini when no model
+    backend (AI-Studio key or Vertex) is configured."""
+    if _model_available():
         return None
     state = callback_context.state
     text = state.get("chat_text") or ""
@@ -119,8 +119,8 @@ def _classifier_offline_fallback_callback(callback_context, llm_request):
 
 def _responder_offline_fallback_callback(callback_context, llm_request):
     """Renders the template confirmation instead of calling Gemini when no
-    API key is configured."""
-    if _has_api_key():
+    model backend (AI-Studio key or Vertex) is configured."""
+    if _model_available():
         return None
     state = callback_context.state
     save_result = state.get("save_result") or {}
