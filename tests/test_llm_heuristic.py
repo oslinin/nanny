@@ -20,7 +20,7 @@ def test_model_available_via_vertex_backend(monkeypatch):
     monkeypatch.delenv("GEMINI_API_KEY", raising=False)
     monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
     monkeypatch.setenv("GOOGLE_GENAI_USE_VERTEXAI", "true")
-    monkeypatch.setenv("GOOGLE_CLOUD_PROJECT", "your-gcp-project-id")
+    monkeypatch.setenv("GOOGLE_CLOUD_PROJECT", "test-project")
     assert _use_vertex() is True
     assert _model_available() is True
 
