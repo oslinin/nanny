@@ -34,6 +34,7 @@ from pathlib import Path
 from typing import Protocol
 
 from fastapi import Depends, FastAPI, File, Header, HTTPException, UploadFile
+from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -42,7 +43,7 @@ from google.adk.sessions import InMemorySessionService
 from google.genai import types
 from pydantic import BaseModel
 
-from . import corpus
+from . import corpus, speech
 from .activity import KNOWN_ACTIVITY_TYPES, KNOWN_UNITS
 from .stores import get_store
 from .workflow import DEFAULT_CLIENT_ID, build_app
@@ -50,6 +51,8 @@ from .workflow import DEFAULT_CLIENT_ID, build_app
 # Reject anything larger than this on upload — a guard on a parent-supplied
 # reference file, not a tuned limit.
 _MAX_CORPUS_FILE_BYTES = 10 * 1024 * 1024
+# A spoken log is a few seconds of audio; cap it well above that.
+_MAX_AUDIO_BYTES = 5 * 1024 * 1024
 
 logging.basicConfig(level=os.environ.get("NANNY_LOG_LEVEL", "INFO"))
 logger = logging.getLogger("nanny.server")
@@ -404,6 +407,33 @@ async def corpus_delete(filename: str, client_id: str = Depends(_client_id)) -> 
     if not removed:
         raise HTTPException(404, "no such reference")
     return {"ok": True, "filename": filename}
+
+
+@app.get("/api/transcribe")
+async def transcribe_status() -> dict:
+    """Tells the frontend whether the server-side STT fallback exists.
+
+    The mic button uses the browser's Web Speech API by default; it only falls
+    back to this endpoint when ``enabled`` is true.
+    """
+    return {"enabled": speech.stt_enabled()}
+
+
+@app.post("/api/transcribe", dependencies=[Depends(_require_api_token)])
+async def transcribe(file: UploadFile = File(...)) -> dict:
+    """Transcribes recorded audio (WebM/Opus) to text via Cloud Speech-to-Text."""
+    if not speech.stt_enabled():
+        raise HTTPException(501, "server-side speech-to-text is not enabled")
+    data = await file.read()
+    if not data:
+        raise HTTPException(400, "audio is empty")
+    if len(data) > _MAX_AUDIO_BYTES:
+        raise HTTPException(413, "audio is too large")
+    # The Speech-to-Text client is blocking gRPC; keep it off the event loop.
+    transcript = await run_in_threadpool(
+        speech.transcribe, data, file.content_type or "audio/webm"
+    )
+    return {"transcript": transcript}
 
 
 @app.get("/")

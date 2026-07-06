@@ -291,6 +291,25 @@
   }
   .btn-primary:hover { filter: brightness(1.06); }
   .btn-primary:disabled { opacity: 0.5; cursor: default; }
+  .mic-btn {
+    border: 1px solid var(--border);
+    background: var(--bg);
+    color: var(--ink);
+    border-radius: 11px;
+    padding: 0 0.8rem;
+    font-size: 1.15rem;
+    line-height: 1;
+    cursor: pointer;
+    transition: background 0.15s ease, border-color 0.15s ease;
+  }
+  .mic-btn:hover { border-color: var(--accent); }
+  .mic-btn.listening { background: var(--danger); border-color: var(--danger); color: #fff; animation: micpulse 1.2s ease-in-out infinite; }
+  .mic-btn:disabled { opacity: 0.5; cursor: default; }
+  @keyframes micpulse {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(209, 73, 91, 0.5); }
+    50% { box-shadow: 0 0 0 8px rgba(209, 73, 91, 0); }
+  }
+  .mic-hint { font-size: 0.76rem; color: var(--muted); margin: 0.5rem 0 0; }
 
   /* Insights */
   @media (min-width: 820px) { .insights-panel, .refs-panel { grid-column: 1 / -1; } }
@@ -393,8 +412,10 @@
       </div>
       <form class="chat-input" id="chat-form">
         <input id="chat-text" type="text" placeholder='Type a message (e.g., "pooped at 3")' autocomplete="off" />
+        <button type="button" class="mic-btn" id="mic-btn" aria-label="Speak to log" aria-pressed="false" hidden>🎤</button>
         <button type="submit" class="btn-primary">Send</button>
       </form>
+      <p class="mic-hint" id="mic-hint" hidden>Listening… speak your log, then pause.</p>
     </section>
 
     <section class="panel insights-panel">
@@ -544,25 +565,135 @@ document.querySelectorAll('button.tap').forEach((btn) => {
   });
 });
 
-document.getElementById('chat-form').addEventListener('submit', async (e) => {
-  e.preventDefault();
-  const input = document.getElementById('chat-text');
-  const text = input.value.trim();
+// One path for typed and spoken input. On a voice turn, the reply is also read
+// back aloud (driving mode).
+async function sendChat(text, opts) {
+  opts = opts || {};
+  text = (text || '').trim();
   if (!text) return;
+  const input = document.getElementById('chat-text');
   addMessage('user', text);
-  input.value = '';
   input.disabled = true;
   try {
     const data = await postJSON('/api/chat', { text });
     addMessage('agent', data.response_text, !data.ok);
     if (data.ok) renderRhythm(true);
+    if (opts.viaVoice) speak(data.response_text);
   } catch (err) {
     addMessage('agent', 'Error: ' + err.message, true);
   } finally {
     input.disabled = false;
     input.focus();
   }
+}
+
+document.getElementById('chat-form').addEventListener('submit', (e) => {
+  e.preventDefault();
+  const input = document.getElementById('chat-text');
+  const text = input.value.trim();
+  if (!text) return;
+  input.value = '';
+  sendChat(text);
 });
+
+// --- Speak button (hands-free logging) --------------------------------------
+// Default engine: the browser's free Web Speech API. Fallback: record audio and
+// POST it to /api/transcribe (Cloud Speech-to-Text), only when that endpoint
+// reports enabled. If neither is available, the mic button stays hidden.
+const micBtn = document.getElementById('mic-btn');
+const micHint = document.getElementById('mic-hint');
+const SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition;
+let listening = false;
+let recognition = null;
+let mediaRecorder = null;
+let mediaChunks = [];
+
+function speak(text) {
+  try {
+    if (!('speechSynthesis' in window) || !text) return;
+    window.speechSynthesis.cancel();
+    const utter = new SpeechSynthesisUtterance(text);
+    utter.lang = 'en-US';
+    window.speechSynthesis.speak(utter);
+  } catch (err) { /* TTS is best-effort */ }
+}
+
+function setListening(on) {
+  listening = on;
+  micBtn.classList.toggle('listening', on);
+  micBtn.setAttribute('aria-pressed', on ? 'true' : 'false');
+  micBtn.textContent = on ? '⏹' : '🎤';
+  micHint.hidden = !on;
+}
+
+function startWebSpeech() {
+  recognition = new SpeechRec();
+  recognition.lang = 'en-US';
+  recognition.interimResults = false;
+  recognition.maxAlternatives = 1;
+  recognition.onresult = (e) => {
+    const transcript = e.results[0][0].transcript;
+    if (transcript) sendChat(transcript, { viaVoice: true });
+  };
+  recognition.onerror = () => setListening(false);
+  recognition.onend = () => setListening(false);
+  setListening(true);
+  recognition.start();
+}
+
+async function startServerRecording() {
+  const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  mediaChunks = [];
+  mediaRecorder = new MediaRecorder(stream, { mimeType: 'audio/webm' });
+  mediaRecorder.ondataavailable = (e) => { if (e.data.size) mediaChunks.push(e.data); };
+  mediaRecorder.onstop = async () => {
+    stream.getTracks().forEach((t) => t.stop());
+    setListening(false);
+    const blob = new Blob(mediaChunks, { type: 'audio/webm' });
+    if (!blob.size) return;
+    micBtn.disabled = true;
+    try {
+      const form = new FormData();
+      form.append('file', blob, 'audio.webm');
+      const res = await fetch(API_BASE + '/api/transcribe', {
+        method: 'POST', headers: authHeaders(), body: form,
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data.transcript) sendChat(data.transcript, { viaVoice: true });
+    } catch (err) { /* ignore */ } finally {
+      micBtn.disabled = false;
+    }
+  };
+  setListening(true);
+  mediaRecorder.start();
+}
+
+async function toggleVoice() {
+  if (listening) {
+    if (recognition) recognition.stop();
+    else if (mediaRecorder && mediaRecorder.state !== 'inactive') mediaRecorder.stop();
+    return;
+  }
+  try {
+    if (SpeechRec) startWebSpeech();
+    else await startServerRecording();
+  } catch (err) {
+    setListening(false);
+  }
+}
+
+micBtn.addEventListener('click', toggleVoice);
+
+// Reveal the mic only if a voice engine is actually available.
+(async function initVoice() {
+  if (SpeechRec) { micBtn.hidden = false; return; }
+  if (!(navigator.mediaDevices && window.MediaRecorder)) return;
+  try {
+    const res = await fetch(API_BASE + '/api/transcribe', { headers: authHeaders() });
+    const data = await res.json();
+    if (data.enabled) micBtn.hidden = false;
+  } catch (err) { /* leave hidden */ }
+})();
 
 // Insights: proactive (empty question) surfaces the agent's own observation;
 // the form asks a specific question. Both hit the same /api/insights endpoint
