@@ -33,7 +33,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Protocol
 
-from fastapi import Depends, FastAPI, Header, HTTPException
+from fastapi import Depends, FastAPI, File, Header, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -42,9 +42,14 @@ from google.adk.sessions import InMemorySessionService
 from google.genai import types
 from pydantic import BaseModel
 
+from . import corpus
 from .activity import KNOWN_ACTIVITY_TYPES, KNOWN_UNITS
 from .stores import get_store
 from .workflow import DEFAULT_CLIENT_ID, build_app
+
+# Reject anything larger than this on upload — a guard on a parent-supplied
+# reference file, not a tuned limit.
+_MAX_CORPUS_FILE_BYTES = 10 * 1024 * 1024
 
 logging.basicConfig(level=os.environ.get("NANNY_LOG_LEVEL", "INFO"))
 logger = logging.getLogger("nanny.server")
@@ -350,6 +355,55 @@ async def insights(
         response_text=final_state.get("response_text", ""),
         used_llm_response=final_state.get("used_llm_response"),
     )
+
+
+@app.get("/api/corpus")
+async def corpus_list(client_id: str = Depends(_client_id)) -> dict:
+    """Lists this client's uploaded references.
+
+    Reports ``enabled: false`` (rather than erroring) when the RAG feature is
+    off, so the frontend can simply hide the panel.
+    """
+    if not corpus.rag_enabled():
+        return {"enabled": False, "files": []}
+    return {"enabled": True, "files": corpus.list_files(client_id)}
+
+
+@app.post("/api/corpus", dependencies=[Depends(_require_api_token)])
+async def corpus_upload(
+    file: UploadFile = File(...), client_id: str = Depends(_client_id)
+) -> dict:
+    """Uploads one reference file into this client's corpus."""
+    if not corpus.rag_enabled():
+        raise HTTPException(501, "the reference-corpus feature is not enabled")
+    # Use only the basename so a crafted filename can't carry path components
+    # into the stored display name.
+    filename = os.path.basename(file.filename or "")
+    ext = os.path.splitext(filename)[1].lower()
+    if not filename or ext not in corpus.ALLOWED_EXTENSIONS:
+        raise HTTPException(
+            400,
+            f"unsupported file; allowed extensions are "
+            f"{list(corpus.ALLOWED_EXTENSIONS)}",
+        )
+    data = await file.read()
+    if not data:
+        raise HTTPException(400, "file is empty")
+    if len(data) > _MAX_CORPUS_FILE_BYTES:
+        raise HTTPException(413, "file is too large")
+    corpus.add_file(client_id, filename, data)
+    return {"ok": True, "filename": filename}
+
+
+@app.delete("/api/corpus/{filename}", dependencies=[Depends(_require_api_token)])
+async def corpus_delete(filename: str, client_id: str = Depends(_client_id)) -> dict:
+    """Removes one reference from this client's corpus."""
+    if not corpus.rag_enabled():
+        raise HTTPException(501, "the reference-corpus feature is not enabled")
+    removed = corpus.delete_file(client_id, os.path.basename(filename))
+    if not removed:
+        raise HTTPException(404, "no such reference")
+    return {"ok": True, "filename": filename}
 
 
 @app.get("/")

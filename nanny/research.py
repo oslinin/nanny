@@ -39,9 +39,11 @@ from pathlib import Path
 from google.adk.agents.llm_agent import LlmAgent
 from google.adk.models.llm_response import LlmResponse
 from google.adk.skills import load_skill_from_dir
+from google.adk.tools.retrieval.base_retrieval_tool import BaseRetrievalTool
 from google.adk.tools.skill_toolset import SkillToolset
 from google.genai import types
 
+from . import corpus
 from .llm import _model_available, _summarize_insights
 from .security import screen_text
 
@@ -170,7 +172,56 @@ def _optional_research_tools() -> list:
     if os.environ.get("GOOGLE_CSE_ID") and os.environ.get("GOOGLE_CSE_API_KEY"):
         tools.append(_search_reputable_child_health)
 
+    if corpus.rag_enabled():
+        tools.append(_PerClientRagRetrieval())
+
     return tools
+
+
+class _PerClientRagRetrieval(BaseRetrievalTool):
+    """Retrieves from *this parent's own* Vertex RAG corpus.
+
+    A custom ``BaseRetrievalTool`` rather than ADK's built-in
+    ``VertexAiRagRetrieval`` on purpose: that one pins a fixed set of corpora at
+    construction (and, on Gemini 2, injects a model-side retrieval tool), so it
+    can't scope to the caller. This one reads the ``client_id`` from turn state
+    and queries only that client's corpus — the same per-visitor isolation as
+    the activity log. Only attached when ``NANNY_RAG_ENABLED`` is on, so it
+    never runs (and never imports ``vertexai``) in local dev/tests.
+    """
+
+    def __init__(self) -> None:
+        super().__init__(
+            name="search_my_references",
+            description=(
+                "Search the parent's own uploaded reference materials (books, "
+                "handouts) for passages relevant to the query. Use this when the "
+                "parent asks something their own references may cover; cite that "
+                "you drew on their uploaded material."
+            ),
+        )
+
+    async def run_async(self, *, args: dict, tool_context) -> str:
+        from .workflow import DEFAULT_CLIENT_ID
+
+        client_id = tool_context.state.get("client_id") or DEFAULT_CLIENT_ID
+        query = args.get("query") or ""
+        corpus_name = corpus.resolve_corpus_name(client_id)
+        if not corpus_name:
+            return "The parent has not uploaded any reference materials."
+        from vertexai import rag
+
+        response = await rag.async_retrieve_contexts(
+            text=query,
+            rag_resources=[rag.RagResource(rag_corpus=corpus_name)],
+            rag_retrieval_config=rag.RagRetrievalConfig(top_k=5),
+        )
+        passages = [
+            c.text for c in response.contexts.contexts if getattr(c, "text", "")
+        ]
+        if not passages:
+            return "No relevant passages found in the parent's references."
+        return "\n\n---\n\n".join(passages)
 
 
 _INSIGHTS_INSTRUCTION = """\
@@ -191,6 +242,9 @@ Rules:
   general knowledge, and cite the source briefly when you use one (e.g. "per
   CDC/AAP guidance"). If a research tool is available and relevant, use it and
   cite what it returns.
+- If a 'search_my_references' tool is available, prefer the parent's own
+  uploaded references when the question may be covered by them, and say when an
+  answer draws on their material.
 - This is general information, NOT medical advice or diagnosis. Frame anything
   health-related as "a pattern worth discussing with your pediatrician," and
   never state or imply a diagnosis.
