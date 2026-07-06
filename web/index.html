@@ -68,6 +68,24 @@
   }
   .masthead p { margin: 0.2rem 0 0; color: var(--muted); font-size: 0.85rem; }
 
+  /* Tab bar: Today / History */
+  .tabs { display: flex; gap: 0.4rem; padding: 0 0.25rem 1rem; }
+  .tab-btn {
+    appearance: none;
+    border: 1px solid var(--border);
+    background: var(--surface);
+    color: var(--muted);
+    border-radius: 999px;
+    padding: 0.45rem 1.15rem;
+    font-family: var(--font-body);
+    font-size: 0.88rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+  }
+  .tab-btn:hover { border-color: var(--accent); }
+  .tab-btn.active { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+
   /* Signature: the Day Rhythm strip */
   .rhythm {
     background: var(--surface);
@@ -286,7 +304,7 @@
   .mic-hint { font-size: 0.76rem; color: var(--muted); margin: 0.5rem 0 0; }
 
   /* Insights */
-  @media (min-width: 820px) { .insights-panel, .refs-panel { grid-column: 1 / -1; } }
+  @media (min-width: 820px) { .refs-panel { grid-column: 1 / -1; } }
   .insights-actions { margin-bottom: 0.7rem; }
   button.insight {
     appearance: none;
@@ -322,6 +340,34 @@
   form.refs-form input[type=file] { flex: 1; font-size: 0.82rem; color: var(--muted); min-width: 12rem; }
   .refs-status { font-size: 0.78rem; color: var(--muted); margin: 0.55rem 0 0; min-height: 1em; }
 
+  /* History list */
+  .history-day { margin-bottom: 1.15rem; }
+  .history-day:last-child { margin-bottom: 0; }
+  .history-day h3 {
+    margin: 0 0 0.5rem;
+    font-family: var(--font-display);
+    font-size: 0.82rem;
+    font-weight: 650;
+    color: var(--muted);
+    letter-spacing: 0.02em;
+  }
+  .history-row {
+    display: flex;
+    align-items: center;
+    gap: 0.7rem;
+    padding: 0.55rem 0.75rem;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 11px;
+    margin-bottom: 0.4rem;
+  }
+  .history-row:last-child { margin-bottom: 0; }
+  .history-glyph { font-size: 1.2rem; line-height: 1; flex: none; }
+  .history-body { flex: 1; min-width: 0; }
+  .history-label { font-size: 0.9rem; font-weight: 550; }
+  .history-notes { font-size: 0.8rem; color: var(--muted); margin-top: 0.1rem; word-break: break-word; }
+  .history-time { font-size: 0.8rem; color: var(--muted); flex: none; }
+
   /* Quality floors */
   :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 6px; }
   @keyframes rise { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
@@ -350,6 +396,12 @@
     </div>
   </header>
 
+  <nav class="tabs" role="tablist" aria-label="Views">
+    <button type="button" class="tab-btn active" data-view="today" role="tab" aria-selected="true">Today</button>
+    <button type="button" class="tab-btn" data-view="history" role="tab" aria-selected="false">History</button>
+  </nav>
+
+  <div id="view-today" class="view">
   <section class="rhythm" aria-label="Today's rhythm">
     <div class="rhythm-head">
       <h2>Today's rhythm</h2>
@@ -379,27 +431,16 @@
       <div class="log" id="log" aria-live="polite">
         <p class="log-empty">Tap a control, or just tell me what happened — “he pooped at 3”.</p>
       </div>
+      <div class="insights-actions">
+        <button type="button" class="insight" id="insights-proactive">💡 Insights: what do the patterns say?</button>
+      </div>
       <form class="chat-input" id="chat-form">
-        <input id="chat-text" type="text" placeholder='Type a message (e.g., "pooped at 3")' autocomplete="off" />
+        <input id="chat-text" type="text" placeholder='Log something ("pooped at 3") — or ask a question ("how much should he nap?")' autocomplete="off" />
         <button type="button" class="mic-btn" id="mic-btn" aria-label="Speak to log" aria-pressed="false" hidden>🎤</button>
         <button type="submit" class="btn-primary">Send</button>
       </form>
       <p class="mic-hint" id="mic-hint" hidden>Listening… speak your log, then pause.</p>
-    </section>
-
-    <section class="panel insights-panel">
-      <h2>Evidence-based insights</h2>
-      <div class="log" id="insights-log" aria-live="polite">
-        <p class="log-empty">Ask a question, or see what today's pattern suggests.</p>
-      </div>
-      <div class="insights-actions">
-        <button type="button" class="insight" id="insights-proactive">What do the patterns say?</button>
-      </div>
-      <form class="chat-input" id="insights-form">
-        <input id="insights-text" type="text" placeholder="Ask about feeding, diapers, sleep…" autocomplete="off" />
-        <button type="submit" class="btn-primary">Ask</button>
-      </form>
-      <p class="disclaimer">General information grounded in reputable guidance (CDC, AAP, WHO, UNICEF) — not medical advice. Discuss anything that concerns you with your pediatrician.</p>
+      <p class="disclaimer">Questions ending in “?” get evidence-based answers grounded in reputable guidance (CDC, AAP, WHO, UNICEF) — not medical advice. Discuss anything that concerns you with your pediatrician.</p>
     </section>
 
     <section class="panel refs-panel" id="refs-panel" hidden>
@@ -411,6 +452,16 @@
         <button type="submit" class="btn-primary">Upload</button>
       </form>
       <p class="refs-status" id="refs-status"></p>
+    </section>
+  </div>
+  </div>
+
+  <div id="view-history" class="view" hidden>
+    <section class="panel">
+      <h2>History</h2>
+      <div id="history-list" class="history-list">
+        <p class="log-empty">Loading…</p>
+      </div>
     </section>
   </div>
 </div>
@@ -530,8 +581,12 @@ document.querySelectorAll('button.tap').forEach((btn) => {
   });
 });
 
-// One path for typed and spoken input. On a voice turn, the reply is also read
-// back aloud (driving mode).
+// One path for typed and spoken input. A message ending in "?" is treated as an
+// evidence-based insight question (/api/insights, RAG-grounded); anything else
+// is a log entry (/api/chat). On a voice turn, the reply is also read back aloud
+// (driving mode).
+function isInsightQuestion(text) { return /\?\s*$/.test(text); }
+
 async function sendChat(text, opts) {
   opts = opts || {};
   text = (text || '').trim();
@@ -540,10 +595,16 @@ async function sendChat(text, opts) {
   addMessage('user', text);
   input.disabled = true;
   try {
-    const data = await postJSON('/api/chat', { text });
-    addMessage('agent', data.response_text, !data.ok);
-    if (data.ok) renderRhythm(true);
-    if (opts.viaVoice) speak(data.response_text);
+    if (isInsightQuestion(text)) {
+      const data = await postJSON('/api/insights', { question: text });
+      addMessage('agent', data.response_text, !data.ok);
+      if (opts.viaVoice) speak(data.response_text);
+    } else {
+      const data = await postJSON('/api/chat', { text });
+      addMessage('agent', data.response_text, !data.ok);
+      if (data.ok) renderRhythm(true);
+      if (opts.viaVoice) speak(data.response_text);
+    }
   } catch (err) {
     addMessage('agent', 'Error: ' + err.message, true);
   } finally {
@@ -660,36 +721,23 @@ micBtn.addEventListener('click', toggleVoice);
   } catch (err) { /* leave hidden */ }
 })();
 
-// Insights: proactive (empty question) surfaces the agent's own observation;
-// the form asks a specific question. Both hit the same /api/insights endpoint
-// and render into their own log so they don't clutter the activity chat.
-const insightsLog = document.getElementById('insights-log');
-insightsLog.dataset.agent = 'Insights';
-function addInsight(role, text, isError) { appendMessage(insightsLog, role, text, isError); }
-
+// Insights live inside the chat now. The suggestion chip (empty question) asks
+// the agent to surface its own observation; typed questions ending in "?" are
+// routed to the same /api/insights endpoint by sendChat. Everything renders
+// into the single chat log so logging and insights share one conversation.
 async function requestInsight(question) {
-  addInsight('user', question || 'What do the patterns say?');
+  addMessage('user', question || 'What do the patterns say?');
   try {
     const data = await postJSON('/api/insights', { question });
-    addInsight('agent', data.response_text, !data.ok);
+    addMessage('agent', data.response_text, !data.ok);
   } catch (err) {
-    addInsight('agent', 'Error: ' + err.message, true);
+    addMessage('agent', 'Error: ' + err.message, true);
   }
 }
 
 document.getElementById('insights-proactive').addEventListener('click', (e) => {
   e.target.disabled = true;
   requestInsight('').finally(() => { e.target.disabled = false; });
-});
-
-document.getElementById('insights-form').addEventListener('submit', (e) => {
-  e.preventDefault();
-  const input = document.getElementById('insights-text');
-  const question = input.value.trim();
-  if (!question) return;
-  input.value = '';
-  input.disabled = true;
-  requestInsight(question).finally(() => { input.disabled = false; input.focus(); });
 });
 
 // Your References: the parent's own RAG corpus. The panel is hidden unless the
@@ -769,6 +817,117 @@ document.getElementById('refs-form').addEventListener('submit', async (e) => {
   } catch (err) {
     refsStatus.textContent = 'Error: ' + err.message;
   }
+});
+
+// --- History tab: every logged activity, grouped by day --------------------
+const ACTIVITY_LABELS = {
+  bottle: 'bottle', milk: 'breastmilk', poop: 'poop', wet: 'wet diaper', solids: 'solids',
+};
+
+// Shared day-labeling so the rhythm strip's "today" and the history grouping
+// agree on day boundaries (both compare via Date.toDateString()).
+function dayLabel(d) {
+  const today = new Date();
+  const yesterday = new Date(today);
+  yesterday.setDate(today.getDate() - 1);
+  if (d.toDateString() === today.toDateString()) return 'Today';
+  if (d.toDateString() === yesterday.toDateString()) return 'Yesterday';
+  return d.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' });
+}
+
+function historyLabel(it) {
+  const name = ACTIVITY_LABELS[it.activity_type] || it.activity_type;
+  const qty = Number(it.quantity);
+  if (it.unit === 'count' || !qty) return name;
+  const unit = it.unit === 'grams' ? 'g' : it.unit;
+  return '+' + qty + unit + ' ' + name;
+}
+
+const historyList = document.getElementById('history-list');
+
+async function renderHistory() {
+  let items = [];
+  try {
+    const res = await fetch(API_BASE + '/api/history', { headers: authHeaders() });
+    if (res.ok) items = await res.json();
+  } catch (err) { /* fall through to empty state */ }
+
+  const rows = items
+    .map((it) => ({ it, d: new Date(it.timestamp) }))
+    .filter((x) => !isNaN(x.d))
+    .sort((a, b) => b.d - a.d);
+
+  historyList.innerHTML = '';
+  if (!rows.length) {
+    const p = document.createElement('p');
+    p.className = 'log-empty';
+    p.textContent = 'Nothing logged yet.';
+    historyList.appendChild(p);
+    return;
+  }
+
+  let currentKey = null;
+  let dayEl = null;
+  rows.forEach((x) => {
+    const key = x.d.toDateString();
+    if (key !== currentKey) {
+      currentKey = key;
+      dayEl = document.createElement('div');
+      dayEl.className = 'history-day';
+      const h = document.createElement('h3');
+      h.textContent = dayLabel(x.d);
+      dayEl.appendChild(h);
+      historyList.appendChild(dayEl);
+    }
+    const row = document.createElement('div');
+    row.className = 'history-row';
+
+    const glyph = document.createElement('span');
+    glyph.className = 'history-glyph';
+    glyph.textContent = RHYTHM_GLYPHS[x.it.activity_type] || '•';
+
+    const body = document.createElement('div');
+    body.className = 'history-body';
+    const label = document.createElement('div');
+    label.className = 'history-label';
+    label.textContent = historyLabel(x.it);
+    body.appendChild(label);
+    if (x.it.notes) {
+      const notes = document.createElement('div');
+      notes.className = 'history-notes';
+      notes.textContent = x.it.notes;
+      body.appendChild(notes);
+    }
+
+    const time = document.createElement('span');
+    time.className = 'history-time';
+    time.textContent = x.d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+
+    row.appendChild(glyph);
+    row.appendChild(body);
+    row.appendChild(time);
+    dayEl.appendChild(row);
+  });
+}
+
+const views = {
+  today: document.getElementById('view-today'),
+  history: document.getElementById('view-history'),
+};
+
+document.querySelectorAll('.tab-btn').forEach((btn) => {
+  btn.addEventListener('click', () => {
+    const view = btn.dataset.view;
+    document.querySelectorAll('.tab-btn').forEach((b) => {
+      const active = b === btn;
+      b.classList.toggle('active', active);
+      b.setAttribute('aria-selected', active ? 'true' : 'false');
+    });
+    views.today.hidden = view !== 'today';
+    views.history.hidden = view !== 'history';
+    // Fetch fresh each time the tab opens so newly logged activities show up.
+    if (view === 'history') renderHistory();
+  });
 });
 
 renderRhythm();
