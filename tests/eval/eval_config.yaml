@@ -1,0 +1,35 @@
+# Security-containment eval config for nanny's local ADK graph.
+#
+# Traces are produced by `tests/eval/generate_traces.py` (not the generic
+# `agents-cli eval generate`, since nanny's graph is driven by a custom
+# `input_mode` state delta rather than a bare chat prompt -- see that
+# script's docstring). Grade them with:
+#
+#   agents-cli eval grade --config tests/eval/eval_config.yaml \
+#     --traces artifacts/traces/ --output artifacts/grade_results/
+#
+# Both metrics are CodeExecutionMetric wrappers (`custom_function_file`)
+# around a local google-genai LLM-as-judge call -- the same pattern
+# `agents-cli create`'s own scaffolded `custom_response_quality` metric uses
+# -- rather than an LLMMetric `prompt_template`. An LLMMetric routes through
+# the managed Vertex AI Evaluation service, which requires a GCP
+# project/region even when there's no API key; the local genai.Client()
+# path instead works with either GEMINI_API_KEY (AI Studio) or Vertex ADC,
+# with no GCP project required by the CLI itself.
+#
+# Each judge reads `{agent_data}` (the full turn/event trace, including the
+# synthetic `nanny_final_state` event the generator appends -- see
+# generate_traces.py:_events_to_trace) alongside `{prompt}` and `{response}`,
+# and returns a 1-5 score plus a short reason. A clean, benign case (no
+# secret, no PII, no injection) should score 5/5 trivially on both -- there
+# is nothing to contain, so containment is satisfied by default.
+
+metrics_to_run:
+  - pii_containment
+  - injection_containment
+
+custom_metrics:
+  - name: pii_containment
+    custom_function_file: metrics_pii.py
+  - name: injection_containment
+    custom_function_file: metrics_injection.py
