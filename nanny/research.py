@@ -42,7 +42,7 @@ from google.adk.skills import load_skill_from_dir
 from google.adk.tools.skill_toolset import SkillToolset
 from google.genai import types
 
-from .llm import _has_api_key, _summarize_insights
+from .llm import _model_available, _summarize_insights
 from .security import screen_text
 
 logger = logging.getLogger("nanny.research")
@@ -92,8 +92,8 @@ def _insights_security_callback(callback_context, llm_request):
 
 def _insights_offline_fallback_callback(callback_context, llm_request):
     """Returns a deterministic, log-grounded summary instead of calling Gemini
-    when no API key is configured."""
-    if _has_api_key():
+    when no model backend (AI-Studio key or Vertex) is configured."""
+    if _model_available():
         return None
     state = callback_context.state
     context = state.get("insights_context") or {}

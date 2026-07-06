@@ -22,7 +22,32 @@ from .activity import ActivityError, BabyActivity
 
 
 def _has_api_key() -> bool:
+    """True when an AI-Studio (Gemini Developer API) key is configured."""
     return bool(os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY"))
+
+
+def _use_vertex() -> bool:
+    """True when google-genai is pointed at the Vertex AI backend.
+
+    On Vertex the model is reached through the service account (ADC), not an
+    API key — this is how it's authenticated when deployed to Agent Runtime
+    (the runtime sets ``GOOGLE_GENAI_USE_VERTEXAI`` and the project for us). We
+    mirror google-genai's own switch so the offline gate below doesn't mistake
+    "no API key" for "no model" in that environment.
+    """
+    val = os.environ.get("GOOGLE_GENAI_USE_VERTEXAI", "").strip().lower()
+    return val in ("1", "true", "yes") and bool(os.environ.get("GOOGLE_CLOUD_PROJECT"))
+
+
+def _model_available() -> bool:
+    """True when a real Gemini call can be made — via either backend.
+
+    The agents' offline fallbacks gate on this: without it (i.e. neither an API
+    key nor the Vertex backend configured) they serve a deterministic heuristic
+    instead of calling a model. Keying only on the API key would wrongly force
+    the offline path on a Vertex deployment, where there is no key by design.
+    """
+    return _has_api_key() or _use_vertex()
 
 
 _TYPE_KEYWORDS = {

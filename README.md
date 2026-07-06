@@ -170,11 +170,21 @@ curl -s -X POST http://127.0.0.1:8000/api/chat \
 
 ## LLM configuration
 
-Set `GEMINI_API_KEY` (or `GOOGLE_API_KEY`) to have `ClassifierAgent`,
-`ResponderAgent`, and `InsightsAgent` call Gemini for real. Without a key, all
-three fall back to a small offline heuristic so the app is still fully runnable
-— every response reports `used_llm_extraction` / `used_llm_response` so you can
-tell which path served a given request.
+There are two ways to give the three agents (`ClassifierAgent`,
+`ResponderAgent`, `InsightsAgent`) a real Gemini backend:
+
+- **Locally / AI Studio:** set `GEMINI_API_KEY` (or `GOOGLE_API_KEY`).
+- **On Vertex AI:** set `GOOGLE_GENAI_USE_VERTEXAI=true` plus
+  `GOOGLE_CLOUD_PROJECT` / `GOOGLE_CLOUD_LOCATION`, and authenticate with a
+  service account (ADC) — **no API key needed**. A deployment to Agent Runtime
+  configures this for you, so the deployed agents call Gemini through Vertex
+  with the service account you granted `roles/aiplatform.user`.
+
+With neither configured, all three fall back to a small offline heuristic so
+the app is still fully runnable — every response reports
+`used_llm_extraction` / `used_llm_response` so you can tell which path served a
+given request. (The offline gate keys on *either* backend, so a Vertex
+deployment with no API key still uses the real model rather than the fallback.)
 
 ## Evidence-based insights
 
@@ -284,14 +294,15 @@ finishes — save it, the dashboard needs it.
 
 ### 2. Deploy the dashboard to Cloud Run
 
+On this path the dashboard is a **thin proxy** — it forwards to the agent on
+Agent Runtime and never calls Gemini itself, so it needs **no Gemini API key
+and no model secret**. The model runs inside Agent Runtime (step 1),
+authenticated by that resource's service account via Vertex. The dashboard just
+needs the resource name, the project/location to reach it, and permission to
+call it.
+
 ```sh
-# Store your Gemini key in Secret Manager rather than as a plain env var.
-gcloud services enable run.googleapis.com secretmanager.googleapis.com \
-  --project "$GOOGLE_CLOUD_PROJECT"
-printf '%s' "$GEMINI_API_KEY" | gcloud secrets create nanny-gemini-key \
-  --project "$GOOGLE_CLOUD_PROJECT" --data-file=- \
-  || printf '%s' "$GEMINI_API_KEY" | gcloud secrets versions add nanny-gemini-key \
-  --project "$GOOGLE_CLOUD_PROJECT" --data-file=-
+gcloud services enable run.googleapis.com --project "$GOOGLE_CLOUD_PROJECT"
 
 # Pick your own token; the GitHub Pages frontend will need the same value.
 export NANNY_API_TOKEN=$(openssl rand -hex 16)
@@ -305,7 +316,6 @@ gcloud run deploy nanny \
   --region "$GOOGLE_CLOUD_LOCATION" \
   --allow-unauthenticated \
   --min-instances=1 --max-instances=1 \
-  --set-secrets=GEMINI_API_KEY=nanny-gemini-key:latest \
   --set-env-vars="NANNY_API_TOKEN=${NANNY_API_TOKEN},NANNY_ALLOWED_ORIGINS=https://YOUR-USERNAME.github.io,NANNY_AGENT_ENGINE_RESOURCE_NAME=${AGENT_ENGINE_RESOURCE_NAME},GOOGLE_CLOUD_PROJECT=${GOOGLE_CLOUD_PROJECT},GOOGLE_CLOUD_LOCATION=${GOOGLE_CLOUD_LOCATION}"
 
 # The dashboard's own service account needs permission to call the deployed
@@ -317,6 +327,15 @@ gcloud projects add-iam-policy-binding "$GOOGLE_CLOUD_PROJECT" \
   --member="serviceAccount:${RUN_SERVICE_ACCOUNT}" \
   --role="roles/aiplatform.user"
 ```
+
+> **Skipping Agent Runtime?** If you leave `NANNY_AGENT_ENGINE_RESOURCE_NAME`
+> unset, the dashboard runs the graph *in-process* (`_LocalRunnerBackend`) and
+> then it *does* make the model calls — give it a backend by adding either
+> `--set-secrets=GEMINI_API_KEY=<your-secret>:latest`, or
+> `--set-env-vars=...,GOOGLE_GENAI_USE_VERTEXAI=true` (it already has the
+> project/location and a service account, so grant that SA
+> `roles/aiplatform.user` too). Without one, the deployed app serves the
+> offline heuristic.
 
 `--source .` has Cloud Build build the image from this repo's `Dockerfile` —
 you don't need Docker installed locally. Setting
