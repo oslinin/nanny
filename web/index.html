@@ -297,6 +297,8 @@
   .mic-btn:hover { border-color: var(--accent); }
   .mic-btn.listening { background: var(--danger); border-color: var(--danger); color: #fff; animation: micpulse 1.2s ease-in-out infinite; }
   .mic-btn:disabled { opacity: 0.5; cursor: default; }
+  .mic-btn.unavailable { opacity: 0.45; cursor: help; }
+  .mic-btn.unavailable:hover { border-color: var(--border); }
   @keyframes micpulse {
     0%, 100% { box-shadow: 0 0 0 0 rgba(209, 73, 91, 0.5); }
     50% { box-shadow: 0 0 0 8px rgba(209, 73, 91, 0); }
@@ -581,11 +583,17 @@ document.querySelectorAll('button.tap').forEach((btn) => {
   });
 });
 
-// One path for typed and spoken input. A message ending in "?" is treated as an
-// evidence-based insight question (/api/insights, RAG-grounded); anything else
-// is a log entry (/api/chat). On a voice turn, the reply is also read back aloud
-// (driving mode).
-function isInsightQuestion(text) { return /\?\s*$/.test(text); }
+// One path for typed and spoken input. A message ending in "?", or phrased as
+// a question (spoken input rarely carries punctuation, e.g. "is my baby eating
+// enough"), is treated as an evidence-based insight question (/api/insights,
+// RAG-grounded); anything else is a log entry (/api/chat). On a voice turn,
+// the reply is also read back aloud (driving mode).
+const QUESTION_STARTERS =
+  /^(is|are|was|were|am|do|does|did|can|could|should|would|will|shall|has|have|had|what|why|how|when|where|who|whom|whose|which)\b/i;
+function isInsightQuestion(text) {
+  const trimmed = text.trim();
+  return /\?\s*$/.test(trimmed) || QUESTION_STARTERS.test(trimmed);
+}
 
 async function sendChat(text, opts) {
   opts = opts || {};
@@ -695,6 +703,12 @@ async function startServerRecording() {
 }
 
 async function toggleVoice() {
+  // When no voice engine is available the button is shown muted; a tap explains
+  // why in the chat (in addition to the hover tooltip).
+  if (micBtn.classList.contains('unavailable')) {
+    addMessage('agent', micBtn.dataset.reason || 'Voice input is unavailable here.', true);
+    return;
+  }
   if (listening) {
     if (recognition) recognition.stop();
     else if (mediaRecorder && mediaRecorder.state !== 'inactive') mediaRecorder.stop();
@@ -710,15 +724,39 @@ async function toggleVoice() {
 
 micBtn.addEventListener('click', toggleVoice);
 
-// Reveal the mic only if a voice engine is actually available.
+// Reveal the mic if a voice engine is available. If none is, still show it —
+// muted, with a tooltip (and tap message) explaining why — so it isn't just
+// silently missing.
+function showMicUnavailable(reason) {
+  micBtn.hidden = false;
+  micBtn.classList.add('unavailable');
+  micBtn.dataset.reason = reason;
+  micBtn.title = reason;
+  micBtn.setAttribute('aria-disabled', 'true');
+  micBtn.setAttribute('aria-label', 'Voice unavailable — ' + reason);
+}
+
 (async function initVoice() {
+  // Both voice paths need mic access, which browsers only grant in a secure
+  // context (https or localhost). This is the most common reason the mic
+  // silently fails — e.g. when the page is opened over http on a LAN IP.
+  if (!window.isSecureContext) {
+    showMicUnavailable('Voice needs a secure connection — open this page over https or localhost.');
+    return;
+  }
+  // Path 1: the browser's built-in Web Speech API (Chrome/Edge; not Firefox).
   if (SpeechRec) { micBtn.hidden = false; return; }
-  if (!(navigator.mediaDevices && window.MediaRecorder)) return;
+  // Path 2: record audio and POST it to /api/transcribe (server-side STT).
+  if (!(navigator.mediaDevices && window.MediaRecorder)) {
+    showMicUnavailable("This browser doesn't support voice input — try Chrome or Edge.");
+    return;
+  }
   try {
     const res = await fetch(API_BASE + '/api/transcribe', { headers: authHeaders() });
     const data = await res.json();
-    if (data.enabled) micBtn.hidden = false;
-  } catch (err) { /* leave hidden */ }
+    if (data.enabled) { micBtn.hidden = false; return; }
+  } catch (err) { /* fall through to the unavailable hint */ }
+  showMicUnavailable("Voice needs Chrome/Edge speech recognition or server transcription — neither is available here.");
 })();
 
 // Insights live inside the chat now. The suggestion chip (empty question) asks
