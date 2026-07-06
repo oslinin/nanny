@@ -7,219 +7,391 @@
 <style>
   :root {
     color-scheme: light dark;
-    --bg: #f5f2ee;
-    --panel: #ffffff;
-    --ink: #2b2420;
-    --muted: #7a7168;
-    --accent: #c97b63;
+    --bg: #f6f7fb;
+    --surface: #ffffff;
+    --ink: #1e2233;
+    --muted: #6b7086;
+    --accent: #4f5bd5;
+    --accent-soft: #eaecfb;
     --accent-ink: #ffffff;
-    --border: #e5ddd3;
-    --bubble: #f0ebe4;
+    --dawn: #ff9e6d;
+    --border: #e7e9f2;
+    --bubble: #eef0f7;
+    --danger: #d1495b;
+    --shadow: 0 1px 2px rgba(30, 34, 51, 0.04), 0 12px 28px -16px rgba(30, 34, 51, 0.22);
+    --radius: 16px;
+    --font-display: ui-rounded, "SF Pro Rounded", "Nunito", "Segoe UI", system-ui, sans-serif;
+    --font-body: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   }
   @media (prefers-color-scheme: dark) {
     :root {
-      --bg: #1c1815;
-      --panel: #26211d;
-      --ink: #f1ece5;
-      --muted: #a89e92;
-      --accent: #e08f6f;
-      --accent-ink: #241a14;
-      --border: #3a332c;
-      --bubble: #322b25;
+      --bg: #14161f;
+      --surface: #1c1f2b;
+      --ink: #eef0f7;
+      --muted: #9aa0b6;
+      --accent: #8b96f0;
+      --accent-soft: #262a3d;
+      --accent-ink: #14161f;
+      --dawn: #ffbe8a;
+      --border: #2b2f3d;
+      --bubble: #232735;
+      --danger: #f2879a;
+      --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 14px 34px -16px rgba(0, 0, 0, 0.66);
     }
   }
   * { box-sizing: border-box; }
   body {
     margin: 0;
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    font-family: var(--font-body);
     background: var(--bg);
     color: var(--ink);
     min-height: 100vh;
+    -webkit-font-smoothing: antialiased;
   }
-  header {
-    padding: 1rem 1.5rem;
-    border-bottom: 1px solid var(--border);
+  .wrap { max-width: 1000px; margin: 0 auto; padding: 1.25rem 1rem 3rem; }
+
+  /* Header + identity */
+  header.masthead {
+    display: flex;
+    align-items: center;
+    gap: 0.7rem;
+    padding: 0.5rem 0.25rem 1.1rem;
   }
-  header h1 { margin: 0; font-size: 1.15rem; }
-  header p { margin: 0.15rem 0 0; color: var(--muted); font-size: 0.85rem; }
-  .layout {
-    display: grid;
-    grid-template-columns: 1fr;
-    gap: 1rem;
-    padding: 1rem;
-    max-width: 980px;
-    margin: 0 auto;
+  .mark { width: 38px; height: 38px; flex: none; color: var(--accent); }
+  .masthead h1 {
+    margin: 0;
+    font-family: var(--font-display);
+    font-size: 1.6rem;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+    line-height: 1;
   }
-  @media (min-width: 800px) {
-    .layout { grid-template-columns: 1fr 1fr; align-items: start; }
-  }
-  .panel {
-    background: var(--panel);
+  .masthead p { margin: 0.2rem 0 0; color: var(--muted); font-size: 0.85rem; }
+
+  /* Signature: the Day Rhythm strip */
+  .rhythm {
+    background: var(--surface);
     border: 1px solid var(--border);
-    border-radius: 12px;
-    padding: 1rem;
+    border-radius: var(--radius);
+    box-shadow: var(--shadow);
+    padding: 1rem 1.1rem 0.8rem;
+    margin-bottom: 1.1rem;
   }
-  .panel h2 {
-    margin: 0 0 0.75rem;
-    font-size: 0.85rem;
-    text-transform: uppercase;
+  .rhythm-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    margin-bottom: 0.7rem;
+  }
+  .rhythm-head h2 {
+    margin: 0;
+    font-family: var(--font-display);
+    font-size: 1rem;
+    font-weight: 650;
+    letter-spacing: -0.01em;
+  }
+  .rhythm-head span { font-size: 0.75rem; color: var(--muted); }
+  .rhythm-track {
+    position: relative;
+    height: 46px;
+    border-radius: 10px;
+    background: linear-gradient(
+      90deg,
+      #1b2140 0%, #3a3f7a 12%, #ff9e6d 25%, #ffd9a8 37%,
+      #eaf0ff 50%, #bfc9f4 62%, #6b6ff0 75%, #3a3f7a 88%, #1b2140 100%
+    );
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.14);
+    overflow: hidden;
+  }
+  .rhythm-dot {
+    position: absolute;
+    top: 50%;
+    transform: translate(-50%, -50%);
+    width: 26px;
+    height: 26px;
+    display: grid;
+    place-items: center;
+    font-size: 14px;
+    border-radius: 50%;
+    background: rgba(255, 255, 255, 0.92);
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+  }
+  .rhythm-now {
+    position: absolute;
+    top: -3px;
+    bottom: -3px;
+    width: 2px;
+    background: var(--ink);
+    opacity: 0.55;
+    transform: translateX(-50%);
+  }
+  .rhythm-now::after {
+    content: "now";
+    position: absolute;
+    top: -1.15rem;
+    left: 50%;
+    transform: translateX(-50%);
+    font-size: 0.6rem;
     letter-spacing: 0.04em;
     color: var(--muted);
   }
-  .taps {
+  .rhythm-empty {
+    position: absolute;
+    inset: 0;
     display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 0.6rem;
+    place-items: center;
+    font-size: 0.78rem;
+    color: #fff;
+    text-shadow: 0 1px 3px rgba(0, 0, 0, 0.5);
   }
+  /* Author display:grid above outranks the UA [hidden] rule, so restore it. */
+  .rhythm-empty[hidden] { display: none; }
+  .rhythm-ticks {
+    display: flex;
+    justify-content: space-between;
+    margin-top: 0.35rem;
+    font-size: 0.66rem;
+    color: var(--muted);
+    letter-spacing: 0.03em;
+  }
+
+  /* Working grid */
+  .layout { display: grid; grid-template-columns: 1fr; gap: 1.1rem; align-items: start; }
+  @media (min-width: 820px) { .layout { grid-template-columns: 1fr 1fr; } }
+
+  .panel {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow);
+    padding: 1.1rem 1.15rem;
+  }
+  .panel h2 {
+    margin: 0 0 0.9rem;
+    font-family: var(--font-display);
+    font-size: 1rem;
+    font-weight: 650;
+    letter-spacing: -0.01em;
+  }
+
+  /* Quick-tap chips */
+  .taps { display: grid; grid-template-columns: 1fr 1fr; gap: 0.6rem; }
   button.tap {
     appearance: none;
-    border: 1px solid var(--border);
-    background: var(--bubble);
-    color: var(--ink);
-    border-radius: 10px;
-    padding: 0.9rem 0.6rem;
-    font-size: 0.95rem;
-    cursor: pointer;
-    transition: transform 0.05s ease, background 0.15s ease;
-  }
-  button.tap:hover { background: var(--accent); color: var(--accent-ink); }
-  button.tap:active { transform: scale(0.97); }
-  button.tap:disabled { opacity: 0.5; cursor: default; }
-  .log {
     display: flex;
     flex-direction: column;
-    gap: 0.6rem;
-    max-height: 420px;
-    overflow-y: auto;
-    margin-bottom: 0.75rem;
-    padding-right: 0.25rem;
-  }
-  .msg {
-    padding: 0.55rem 0.75rem;
-    border-radius: 10px;
-    font-size: 0.9rem;
-    line-height: 1.35;
-    max-width: 90%;
-  }
-  .msg.user { align-self: flex-end; background: var(--accent); color: var(--accent-ink); }
-  .msg.agent { align-self: flex-start; background: var(--bubble); }
-  .msg.agent.error { border: 1px solid #c0554488; }
-  .msg .tag {
-    display: block;
-    font-size: 0.7rem;
-    opacity: 0.7;
-    margin-bottom: 0.15rem;
-  }
-  form.chat-input {
-    display: flex;
-    gap: 0.5rem;
-  }
-  form.chat-input input {
-    flex: 1;
-    padding: 0.6rem 0.75rem;
-    border-radius: 8px;
+    align-items: center;
+    gap: 0.3rem;
     border: 1px solid var(--border);
     background: var(--bg);
     color: var(--ink);
-    font-size: 0.95rem;
+    border-radius: 12px;
+    padding: 0.85rem 0.5rem;
+    font-family: var(--font-body);
+    font-size: 0.85rem;
+    font-weight: 550;
+    cursor: pointer;
+    transition: transform 0.08s ease, box-shadow 0.15s ease, border-color 0.15s ease;
   }
-  form.chat-input button {
+  button.tap .tap-glyph { font-size: 1.4rem; line-height: 1; }
+  button.tap:hover { border-color: var(--accent); box-shadow: var(--shadow); transform: translateY(-2px); }
+  button.tap:active { transform: translateY(0) scale(0.98); }
+  button.tap:disabled { opacity: 0.5; cursor: default; transform: none; }
+
+  /* Conversation logs */
+  .log {
+    display: flex;
+    flex-direction: column;
+    gap: 0.55rem;
+    max-height: 360px;
+    overflow-y: auto;
+    margin-bottom: 0.85rem;
+    padding-right: 0.2rem;
+  }
+  .log-empty { margin: 0.5rem 0; color: var(--muted); font-size: 0.85rem; line-height: 1.4; }
+  .msg {
+    padding: 0.55rem 0.8rem;
+    border-radius: 14px;
+    font-size: 0.9rem;
+    line-height: 1.4;
+    max-width: 88%;
+    animation: rise 0.25s ease both;
+  }
+  .msg.user {
+    align-self: flex-end;
+    background: var(--accent);
+    color: var(--accent-ink);
+    border-bottom-right-radius: 5px;
+  }
+  .msg.agent {
+    align-self: flex-start;
+    background: var(--bubble);
+    border-bottom-left-radius: 5px;
+  }
+  .msg.agent.error { background: transparent; border: 1px solid var(--danger); color: var(--danger); }
+  .msg .tag {
+    display: block;
+    font-size: 0.66rem;
+    font-weight: 600;
+    letter-spacing: 0.03em;
+    text-transform: uppercase;
+    opacity: 0.65;
+    margin-bottom: 0.2rem;
+  }
+
+  /* Inputs + primary buttons */
+  form.chat-input { display: flex; gap: 0.5rem; }
+  form.chat-input input {
+    flex: 1;
+    padding: 0.65rem 0.8rem;
+    border-radius: 11px;
+    border: 1px solid var(--border);
+    background: var(--bg);
+    color: var(--ink);
+    font-size: 0.92rem;
+    font-family: var(--font-body);
+  }
+  .btn-primary {
     border: none;
     background: var(--accent);
     color: var(--accent-ink);
-    border-radius: 8px;
-    padding: 0 1rem;
+    border-radius: 11px;
+    padding: 0 1.1rem;
     cursor: pointer;
-    font-size: 0.95rem;
+    font-family: var(--font-body);
+    font-size: 0.9rem;
+    font-weight: 600;
+    transition: filter 0.15s ease;
   }
-  form.chat-input button:disabled { opacity: 0.5; cursor: default; }
-  @media (min-width: 800px) {
-    .insights-panel { grid-column: 1 / -1; }
-  }
-  .insights-actions { margin-bottom: 0.6rem; }
+  .btn-primary:hover { filter: brightness(1.06); }
+  .btn-primary:disabled { opacity: 0.5; cursor: default; }
+
+  /* Insights */
+  @media (min-width: 820px) { .insights-panel, .refs-panel { grid-column: 1 / -1; } }
+  .insights-actions { margin-bottom: 0.7rem; }
   button.insight {
     appearance: none;
-    border: 1px solid var(--border);
-    background: var(--bubble);
-    color: var(--ink);
-    border-radius: 10px;
-    padding: 0.6rem 0.9rem;
-    font-size: 0.9rem;
+    border: 1px solid var(--accent);
+    background: var(--accent-soft);
+    color: var(--accent);
+    border-radius: 999px;
+    padding: 0.5rem 1rem;
+    font-family: var(--font-body);
+    font-size: 0.86rem;
+    font-weight: 600;
     cursor: pointer;
+    transition: background 0.15s ease;
   }
   button.insight:hover { background: var(--accent); color: var(--accent-ink); }
-  .disclaimer { font-size: 0.72rem; color: var(--muted); margin: 0.6rem 0 0; }
-  @media (min-width: 800px) {
-    .refs-panel { grid-column: 1 / -1; }
-  }
-  .refs-hint { font-size: 0.8rem; color: var(--muted); margin: 0 0 0.75rem; }
-  ul.refs-list { list-style: none; margin: 0 0 0.75rem; padding: 0; display: flex; flex-direction: column; gap: 0.4rem; }
+  .disclaimer { font-size: 0.72rem; color: var(--muted); margin: 0.7rem 0 0; line-height: 1.45; }
+
+  /* References */
+  .refs-hint { font-size: 0.82rem; color: var(--muted); margin: 0 0 0.85rem; line-height: 1.45; }
+  ul.refs-list { list-style: none; margin: 0 0 0.85rem; padding: 0; display: flex; flex-direction: column; gap: 0.45rem; }
   ul.refs-list li {
-    display: flex; align-items: center; justify-content: space-between;
-    gap: 0.5rem; padding: 0.5rem 0.7rem;
-    background: var(--bubble); border-radius: 8px; font-size: 0.9rem;
+    display: flex; align-items: center; justify-content: space-between; gap: 0.5rem;
+    padding: 0.55rem 0.8rem; background: var(--bg);
+    border: 1px solid var(--border); border-radius: 11px; font-size: 0.88rem;
   }
-  ul.refs-list li.refs-empty { color: var(--muted); background: none; padding-left: 0; }
+  ul.refs-list li.refs-empty { color: var(--muted); background: none; border: none; padding-left: 0.1rem; }
   button.refs-remove {
     appearance: none; border: none; background: none; cursor: pointer;
-    color: var(--muted); font-size: 1rem; line-height: 1; padding: 0 0.25rem;
+    color: var(--muted); font-size: 1rem; line-height: 1; padding: 0 0.25rem; border-radius: 6px;
   }
-  button.refs-remove:hover { color: var(--accent); }
+  button.refs-remove:hover { color: var(--danger); }
   form.refs-form { display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; }
-  form.refs-form input[type=file] { flex: 1; font-size: 0.85rem; color: var(--ink); }
-  form.refs-form button {
-    border: none; background: var(--accent); color: var(--accent-ink);
-    border-radius: 8px; padding: 0.5rem 1rem; cursor: pointer; font-size: 0.9rem;
+  form.refs-form input[type=file] { flex: 1; font-size: 0.82rem; color: var(--muted); min-width: 12rem; }
+  .refs-status { font-size: 0.78rem; color: var(--muted); margin: 0.55rem 0 0; min-height: 1em; }
+
+  /* Quality floors */
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 6px; }
+  @keyframes rise { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+  @keyframes dotpulse {
+    0% { transform: translate(-50%, -50%) scale(1); }
+    45% { transform: translate(-50%, -50%) scale(1.55); }
+    100% { transform: translate(-50%, -50%) scale(1); }
   }
-  .refs-status { font-size: 0.78rem; color: var(--muted); margin: 0.5rem 0 0; min-height: 1em; }
+  .rhythm-dot.new { animation: dotpulse 0.7s ease; z-index: 2; }
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { animation: none !important; transition: none !important; }
+  }
 </style>
 </head>
 <body>
-<header>
-  <h1>Nanny</h1>
-  <p>Local baby activity tracker — quick-tap dashboard + AI chat, one shared log.</p>
-</header>
-<div class="layout">
-  <section class="panel">
-    <h2>Quick-Tap Controls</h2>
-    <div class="taps">
-      <button class="tap" data-type="bottle" data-qty="4" data-unit="oz" data-label="+4oz Bottle">+4oz Bottle</button>
-      <button class="tap" data-type="milk" data-qty="2" data-unit="oz" data-label="+2oz Breastmilk">+2oz Breastmilk</button>
-      <button class="tap" data-type="poop" data-qty="1" data-unit="count" data-label="Log 1 Poop">Log 1 Poop</button>
-      <button class="tap" data-type="wet" data-qty="1" data-unit="count" data-label="Log 1 Wet Diaper">Log 1 Wet Diaper</button>
-      <button class="tap" data-type="solids" data-qty="50" data-unit="grams" data-label="+50g Solids">+50g Solids</button>
+<div class="wrap">
+  <header class="masthead">
+    <svg class="mark" viewBox="0 0 40 40" fill="none" aria-hidden="true">
+      <path d="M31 24.5A13 13 0 1 1 18.2 9a10.5 10.5 0 0 0 12.8 15.5Z"
+            fill="currentColor" opacity="0.9" />
+      <circle cx="21" cy="27" r="3.4" fill="var(--dawn)" />
+    </svg>
+    <div>
+      <h1>Nanny</h1>
+      <p>Your baby's day, at a glance — tap, chat, and ask.</p>
     </div>
-  </section>
-  <section class="panel">
-    <h2>AI Chat Log</h2>
-    <div class="log" id="log"></div>
-    <form class="chat-input" id="chat-form">
-      <input id="chat-text" type="text" placeholder='Type a message (e.g., &quot;pooped at 3&quot;)' autocomplete="off" />
-      <button type="submit">Send</button>
-    </form>
-  </section>
-  <section class="panel insights-panel">
-    <h2>Evidence-Based Insights</h2>
-    <div class="log" id="insights-log"></div>
-    <div class="insights-actions">
-      <button type="button" class="insight" id="insights-proactive">What do the patterns say?</button>
+  </header>
+
+  <section class="rhythm" aria-label="Today's rhythm">
+    <div class="rhythm-head">
+      <h2>Today's rhythm</h2>
+      <span>midnight → midnight</span>
     </div>
-    <form class="chat-input" id="insights-form">
-      <input id="insights-text" type="text" placeholder="Ask about feeding, diapers, sleep…" autocomplete="off" />
-      <button type="submit">Ask</button>
-    </form>
-    <p class="disclaimer">General information grounded in reputable guidance (CDC, AAP, WHO, UNICEF) — not medical advice. Discuss anything that concerns you with your pediatrician.</p>
+    <div class="rhythm-track" id="rhythm-track">
+      <div class="rhythm-now" id="rhythm-now" hidden></div>
+      <div class="rhythm-empty" id="rhythm-empty">Nothing logged yet today.</div>
+    </div>
+    <div class="rhythm-ticks"><span>12a</span><span>6a</span><span>noon</span><span>6p</span><span>12a</span></div>
   </section>
-  <section class="panel refs-panel" id="refs-panel" hidden>
-    <h2>Your References</h2>
-    <p class="refs-hint">Upload your own parenting references (PDF, text, or Markdown) — the insights assistant will draw on them for you, alongside the built-in guidance. Only you can see your own references.</p>
-    <ul class="refs-list" id="refs-list"></ul>
-    <form class="refs-form" id="refs-form">
-      <input id="refs-file" type="file" accept=".txt,.md,.pdf" />
-      <button type="submit">Upload</button>
-    </form>
-    <p class="refs-status" id="refs-status"></p>
-  </section>
+
+  <div class="layout">
+    <section class="panel">
+      <h2>Quick tap</h2>
+      <div class="taps">
+        <button class="tap" data-type="bottle" data-qty="4" data-unit="oz" data-label="+4oz Bottle"><span class="tap-glyph">🍼</span><span class="tap-label">+4oz Bottle</span></button>
+        <button class="tap" data-type="milk" data-qty="2" data-unit="oz" data-label="+2oz Breastmilk"><span class="tap-glyph">🤱</span><span class="tap-label">+2oz Breastmilk</span></button>
+        <button class="tap" data-type="poop" data-qty="1" data-unit="count" data-label="Log 1 Poop"><span class="tap-glyph">💩</span><span class="tap-label">Log 1 Poop</span></button>
+        <button class="tap" data-type="wet" data-qty="1" data-unit="count" data-label="Log 1 Wet Diaper"><span class="tap-glyph">💧</span><span class="tap-label">Log 1 Wet Diaper</span></button>
+        <button class="tap" data-type="solids" data-qty="50" data-unit="grams" data-label="+50g Solids"><span class="tap-glyph">🥣</span><span class="tap-label">+50g Solids</span></button>
+      </div>
+    </section>
+
+    <section class="panel">
+      <h2>Chat</h2>
+      <div class="log" id="log" aria-live="polite">
+        <p class="log-empty">Tap a control, or just tell me what happened — “he pooped at 3”.</p>
+      </div>
+      <form class="chat-input" id="chat-form">
+        <input id="chat-text" type="text" placeholder='Type a message (e.g., "pooped at 3")' autocomplete="off" />
+        <button type="submit" class="btn-primary">Send</button>
+      </form>
+    </section>
+
+    <section class="panel insights-panel">
+      <h2>Evidence-based insights</h2>
+      <div class="log" id="insights-log" aria-live="polite">
+        <p class="log-empty">Ask a question, or see what today's pattern suggests.</p>
+      </div>
+      <div class="insights-actions">
+        <button type="button" class="insight" id="insights-proactive">What do the patterns say?</button>
+      </div>
+      <form class="chat-input" id="insights-form">
+        <input id="insights-text" type="text" placeholder="Ask about feeding, diapers, sleep…" autocomplete="off" />
+        <button type="submit" class="btn-primary">Ask</button>
+      </form>
+      <p class="disclaimer">General information grounded in reputable guidance (CDC, AAP, WHO, UNICEF) — not medical advice. Discuss anything that concerns you with your pediatrician.</p>
+    </section>
+
+    <section class="panel refs-panel" id="refs-panel" hidden>
+      <h2>Your references</h2>
+      <p class="refs-hint">Upload your own parenting references (PDF, text, or Markdown) — the insights assistant will draw on them for you, alongside the built-in guidance. Only you can see your own references.</p>
+      <ul class="refs-list" id="refs-list"></ul>
+      <form class="refs-form" id="refs-form">
+        <input id="refs-file" type="file" accept=".txt,.md,.pdf" />
+        <button type="submit" class="btn-primary">Upload</button>
+      </form>
+      <p class="refs-status" id="refs-status"></p>
+    </section>
+  </div>
 </div>
 <script>
 // Same-origin by default (served by nanny/server.py itself). Overridden by
@@ -242,27 +414,77 @@ function getClientId() {
 }
 const CLIENT_ID = getClientId();
 
-const log = document.getElementById('log');
+function authHeaders(extra) {
+  const headers = Object.assign({ 'X-Nanny-Client-Id': CLIENT_ID }, extra || {});
+  if (API_TOKEN) headers['X-Nanny-Token'] = API_TOKEN;
+  return headers;
+}
 
-function addMessage(role, text, isError) {
+async function postJSON(path, body) {
+  const res = await fetch(API_BASE + path, {
+    method: 'POST',
+    headers: authHeaders({ 'Content-Type': 'application/json' }),
+    body: JSON.stringify(body),
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.detail || 'Request failed');
+  return data;
+}
+
+function appendMessage(container, role, text, isError) {
+  const empty = container.querySelector('.log-empty');
+  if (empty) empty.remove();
   const div = document.createElement('div');
   div.className = 'msg ' + role + (isError ? ' error' : '');
   const tag = document.createElement('span');
   tag.className = 'tag';
-  tag.textContent = role === 'user' ? 'You' : 'Nanny Agent';
+  tag.textContent = role === 'user' ? 'You' : container.dataset.agent;
   div.appendChild(tag);
   div.appendChild(document.createTextNode(text));
-  log.appendChild(div);
-  log.scrollTop = log.scrollHeight;
+  container.appendChild(div);
+  container.scrollTop = container.scrollHeight;
 }
 
-async function postJSON(path, body) {
-  const headers = { 'Content-Type': 'application/json', 'X-Nanny-Client-Id': CLIENT_ID };
-  if (API_TOKEN) headers['X-Nanny-Token'] = API_TOKEN;
-  const res = await fetch(API_BASE + path, { method: 'POST', headers, body: JSON.stringify(body) });
-  const data = await res.json();
-  if (!res.ok) throw new Error(data.detail || 'Request failed');
-  return data;
+const log = document.getElementById('log');
+log.dataset.agent = 'Nanny';
+function addMessage(role, text, isError) { appendMessage(log, role, text, isError); }
+
+// --- Day Rhythm strip (the signature): plots today's events by hour ---------
+const RHYTHM_GLYPHS = { bottle: '🍼', milk: '🤱', poop: '💩', wet: '💧', solids: '🥣' };
+const rhythmTrack = document.getElementById('rhythm-track');
+const rhythmNow = document.getElementById('rhythm-now');
+const rhythmEmpty = document.getElementById('rhythm-empty');
+
+function hourFraction(d) { return (d.getHours() + d.getMinutes() / 60) / 24; }
+
+async function renderRhythm(pulseNewest) {
+  let items = [];
+  try {
+    const res = await fetch(API_BASE + '/api/history', { headers: authHeaders() });
+    if (res.ok) items = await res.json();
+  } catch (err) { /* leave the strip empty on error */ }
+
+  rhythmTrack.querySelectorAll('.rhythm-dot').forEach((d) => d.remove());
+  const now = new Date();
+  const today = now.toDateString();
+  const todays = items
+    .map((it) => ({ it, d: new Date(it.timestamp) }))
+    .filter((x) => !isNaN(x.d) && x.d.toDateString() === today)
+    .sort((a, b) => a.d - b.d);
+
+  rhythmEmpty.hidden = todays.length > 0;
+  todays.forEach((x, i) => {
+    const dot = document.createElement('span');
+    dot.className = 'rhythm-dot' + (pulseNewest && i === todays.length - 1 ? ' new' : '');
+    dot.style.left = (hourFraction(x.d) * 100) + '%';
+    dot.textContent = RHYTHM_GLYPHS[x.it.activity_type] || '•';
+    dot.title = x.it.activity_type + ' · ' +
+      x.d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+    rhythmTrack.appendChild(dot);
+  });
+
+  rhythmNow.hidden = false;
+  rhythmNow.style.left = (hourFraction(now) * 100) + '%';
 }
 
 document.querySelectorAll('button.tap').forEach((btn) => {
@@ -278,6 +500,7 @@ document.querySelectorAll('button.tap').forEach((btn) => {
         notes: '',
       });
       addMessage('agent', data.response_text, !data.ok);
+      if (data.ok) renderRhythm(true);
     } catch (err) {
       addMessage('agent', 'Error: ' + err.message, true);
     } finally {
@@ -297,6 +520,7 @@ document.getElementById('chat-form').addEventListener('submit', async (e) => {
   try {
     const data = await postJSON('/api/chat', { text });
     addMessage('agent', data.response_text, !data.ok);
+    if (data.ok) renderRhythm(true);
   } catch (err) {
     addMessage('agent', 'Error: ' + err.message, true);
   } finally {
@@ -309,18 +533,8 @@ document.getElementById('chat-form').addEventListener('submit', async (e) => {
 // the form asks a specific question. Both hit the same /api/insights endpoint
 // and render into their own log so they don't clutter the activity chat.
 const insightsLog = document.getElementById('insights-log');
-
-function addInsight(role, text, isError) {
-  const div = document.createElement('div');
-  div.className = 'msg ' + role + (isError ? ' error' : '');
-  const tag = document.createElement('span');
-  tag.className = 'tag';
-  tag.textContent = role === 'user' ? 'You' : 'Insights';
-  div.appendChild(tag);
-  div.appendChild(document.createTextNode(text));
-  insightsLog.appendChild(div);
-  insightsLog.scrollTop = insightsLog.scrollHeight;
-}
+insightsLog.dataset.agent = 'Insights';
+function addInsight(role, text, isError) { appendMessage(insightsLog, role, text, isError); }
 
 async function requestInsight(question) {
   addInsight('user', question || 'What do the patterns say?');
@@ -353,12 +567,6 @@ document.getElementById('insights-form').addEventListener('submit', (e) => {
 const refsPanel = document.getElementById('refs-panel');
 const refsList = document.getElementById('refs-list');
 const refsStatus = document.getElementById('refs-status');
-
-function authHeaders(extra) {
-  const headers = Object.assign({ 'X-Nanny-Client-Id': CLIENT_ID }, extra || {});
-  if (API_TOKEN) headers['X-Nanny-Token'] = API_TOKEN;
-  return headers;
-}
 
 function renderRefs(files) {
   refsList.innerHTML = '';
@@ -432,6 +640,7 @@ document.getElementById('refs-form').addEventListener('submit', async (e) => {
   }
 });
 
+renderRhythm();
 loadReferences();
 </script>
 </body>
