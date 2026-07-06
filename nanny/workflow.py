@@ -5,9 +5,16 @@ engine (``google.adk.workflow``) and real ADK agents (``google.adk.agents``).
                 \\--(to_classify)--> ClassifierAgent (LLM) --> ClassifierPostProcessNode --(extracted)--> RouterNode
                 \\--(error)-------------------------------------------------------------------------------------> ErrorNode
                 \\--(get_history)-------------------------> HistoryNode
+                \\--(insights)---> InsightsPrepNode -----> InsightsAgent (LLM)
                                                                               \\--(error)------------------------> ErrorNode
     RouterNode -> SaveActivityNode --(saved)--> ResponderAgent (LLM)
                                     \\--(error)----------------------------> ErrorNode
+
+``InsightsAgent`` (see ``nanny/research.py``) is a fourth real ``LlmAgent``: it
+reads a deterministic summary of the log (built by ``InsightsPrepNode``) and
+answers the parent's question — or proactively surfaces an observation —
+grounded in a curated ``child-guidance`` skill plus opt-in research tools
+(Consensus MCP, a scoped guidance search).
 
 ``HistoryNode`` is a pure read: deployed on Vertex AI Agent Runtime, the
 graph is only reachable through ``stream_query``/``async_stream_query`` (no
@@ -39,6 +46,8 @@ from google.adk.workflow import START, Edge, Workflow, node
 
 from .activity import ActivityError, BabyActivity
 from .agents import build_classifier_agent, build_responder_agent
+from .llm import build_insights_context
+from .research import build_insights_agent
 from .store import Store
 
 logger = logging.getLogger("nanny.workflow")
@@ -86,6 +95,8 @@ def build_app(store_resolver: Callable[[str], Store]) -> App:
             ctx.route = "to_classify"
         elif mode == "get_history":
             ctx.route = "get_history"
+        elif mode == "insights":
+            ctx.route = "insights"
         else:
             ctx.state["error"] = f"unknown input_mode {mode!r}"
             ctx.state["last_status"] = "error"
@@ -104,7 +115,27 @@ def build_app(store_resolver: Callable[[str], Store]) -> App:
         ctx.state["history"] = [a.to_dict() for a in store.all()]
         ctx.state["last_status"] = "ok"
 
+    @node
+    async def insights_prep_node(ctx: Context) -> None:
+        """Read-only: summarizes the client's log into state for InsightsAgent.
+
+        Same agent-side-Store rationale as ``history_node`` — the reduction to
+        a compact summary happens here (deterministic) so the agent reasons
+        over a small structure, and the ``insights_context`` it writes is also
+        what the offline fallback grounds a no-LLM reply in.
+        """
+        client_id = ctx.state.get("client_id") or DEFAULT_CLIENT_ID
+        store = store_resolver(client_id)
+        now_iso = ctx.state.get("now_iso") or ""
+        activities = [a.to_dict() for a in store.all()]
+        context = build_insights_context(activities, now_iso=now_iso)
+        ctx.state["insights_context"] = context
+        ctx.state["insights_context_json"] = json.dumps(context)
+        ctx.state.setdefault("question", "")
+        ctx.state["last_status"] = "ok"
+
     classifier_agent = build_classifier_agent()
+    insights_agent = build_insights_agent()
 
     @node
     async def classifier_postprocess_node(ctx: Context) -> None:
@@ -185,6 +216,12 @@ def build_app(store_resolver: Callable[[str], Store]) -> App:
             Edge(from_node=ingest_node, to_node=router_node, route="bypass"),
             Edge(from_node=ingest_node, to_node=classifier_agent, route="to_classify"),
             Edge(from_node=ingest_node, to_node=history_node, route="get_history"),
+            Edge(
+                from_node=ingest_node,
+                to_node=insights_prep_node,
+                route="insights",
+            ),
+            (insights_prep_node, insights_agent),
             Edge(from_node=ingest_node, to_node=error_node, route="error"),
             (classifier_agent, classifier_postprocess_node),
             Edge(

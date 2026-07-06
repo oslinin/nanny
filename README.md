@@ -10,14 +10,17 @@ Built for the [5-Day AI Agents: Intensive Vibe Coding Course With Google](https:
 capstone, **Concierge Agents** track. It demonstrates three of the course's
 key concepts:
 
-1. **Multi-agent systems built with ADK** — `ClassifierAgent` and
-   `ResponderAgent` are genuine `google.adk.agents.LlmAgent` instances wired
-   directly into the workflow graph (`LlmAgent` is itself a `BaseNode`
-   subclass), alongside plain deterministic nodes — not a single workflow
-   with raw model calls stuffed inside function nodes.
+1. **Multi-agent systems built with ADK** — `ClassifierAgent`,
+   `ResponderAgent`, and `InsightsAgent` are genuine
+   `google.adk.agents.LlmAgent` instances wired directly into the workflow
+   graph (`LlmAgent` is itself a `BaseNode` subclass), alongside plain
+   deterministic nodes — not a single workflow with raw model calls stuffed
+   inside function nodes.
 2. **Agent skills** — `ResponderAgent` carries a real `SKILL.md`-based skill
-   (`skills/care-tips/`), loaded via `google.adk.skills` and exposed through
-   `SkillToolset`, that it can consult for a brief, relevant parenting tip.
+   (`skills/care-tips/`) for a brief post-log tip, and `InsightsAgent` carries
+   a second (`skills/child-guidance/`) with cited, evidence-based reference
+   notes; both are loaded via `google.adk.skills` and exposed through
+   `SkillToolset`.
 3. **Security features** — chat input is screened by an explicit guardrail
    (`nanny/security.py`) for prompt-injection attempts and secret-looking
    strings *before* it ever reaches the model, directly answering the
@@ -35,12 +38,16 @@ flowchart TD
     Save["SaveActivityNode\n(deterministic storage, no LLM)"]
     Responder["ResponderAgent\n(real LlmAgent — natural-language summary + care-tips skill)"]
     History["HistoryNode\n(deterministic: read-only activity history)"]
+    InsightsPrep["InsightsPrepNode\n(deterministic: summarize log into state)"]
+    Insights["InsightsAgent\n(real LlmAgent — evidence-grounded, cited)"]
     ErrorNode["ErrorNode\n(friendly rejection message)"]
 
     START --> Ingest
     Ingest -- "bypass (quick-tap)" --> Router
     Ingest -- "to_classify (chat)" --> Classifier
     Ingest -- "get_history" --> History
+    Ingest -- "insights" --> InsightsPrep
+    InsightsPrep --> Insights
     Ingest -- "error" --> ErrorNode
     Classifier --> Postprocess
     Postprocess -- "extracted" --> Router
@@ -75,6 +82,12 @@ flowchart TD
   same graph as everything else) rather than the dashboard/bridge reading
   `Store` directly, so a deployed graph is fully self-contained behind
   `stream_query`/`async_stream_query` — see Deployment below.
+- **InsightsPrepNode → InsightsAgent** — the research-concierge branch. The
+  prep node deterministically reduces the log to a compact per-type/per-day
+  summary in state; `InsightsAgent` (a real `LlmAgent`) then answers the
+  parent's question — or, with no question, proactively surfaces the most
+  useful observation — grounded in a curated `child-guidance` skill plus opt-in
+  research tools. See [Evidence-based insights](#evidence-based-insights).
 - **ErrorNode** — terminal branch reached whenever a prior node rejects the
   input (bad schema, unrecognized text, or a security block).
 
@@ -93,6 +106,8 @@ the PRD's shared `BabyActivity` schema.
 | Quick-tap via API | `curl -X POST localhost:8000/api/quick-tap -H 'Content-Type: application/json' -d '{"activity_type":"bottle","quantity":4,"unit":"oz","notes":""}'` |
 | Chat via API | `curl -X POST localhost:8000/api/chat -H 'Content-Type: application/json' -d '{"text":"he pooped a lot at 3 PM"}'` |
 | View activity history | `curl localhost:8000/api/history` |
+| Proactive insight | `curl -X POST localhost:8000/api/insights -H 'Content-Type: application/json' -d '{"question":""}'` |
+| Ask an insight question | `curl -X POST localhost:8000/api/insights -H 'Content-Type: application/json' -d '{"question":"is my baby feeding enough?"}'` |
 
 See below for the full walkthrough of each step.
 
@@ -155,11 +170,54 @@ curl -s -X POST http://127.0.0.1:8000/api/chat \
 
 ## LLM configuration
 
-Set `GEMINI_API_KEY` (or `GOOGLE_API_KEY`) to have `ClassifierAgent` and
-`ResponderAgent` call Gemini for real. Without a key, both fall back to a
-small offline heuristic so the app is still fully runnable — every response
-reports `used_llm_extraction` / `used_llm_response` so you can tell which
-path served a given request.
+Set `GEMINI_API_KEY` (or `GOOGLE_API_KEY`) to have `ClassifierAgent`,
+`ResponderAgent`, and `InsightsAgent` call Gemini for real. Without a key, all
+three fall back to a small offline heuristic so the app is still fully runnable
+— every response reports `used_llm_extraction` / `used_llm_response` so you can
+tell which path served a given request.
+
+## Evidence-based insights
+
+The **InsightsAgent** turns the log from a record into a concierge: given the
+baby's own activity, it answers questions ("is my baby feeding enough?") and,
+when asked with no question, proactively surfaces the most useful observation —
+always grounded and cited, never diagnostic.
+
+It layers three sources, so it's useful with nothing configured and richer as
+you add credentials (the same opt-in philosophy as `NANNY_API_TOKEN`):
+
+1. **Curated `child-guidance` skill** (always on, offline) — original,
+   plain-language summaries of mainstream public-health guidance, each citing
+   its source. See `skills/child-guidance/SKILL.md` and `SOURCES.md`.
+2. **Consensus.app via MCP** (opt-in) — scientific consensus over the research
+   literature. Set `NANNY_CONSENSUS_MCP_URL` (and `NANNY_CONSENSUS_API_KEY` if
+   required) and install the `research` extra (`uv sync --extra research`).
+3. **Scoped guidance search** (opt-in) — a Google Programmable Search Engine
+   pinned in its console to reputable sites (cdc.gov, aap.org,
+   healthychildren.org, who.int, unicef.org). Set `GOOGLE_CSE_ID` +
+   `GOOGLE_CSE_API_KEY`. (ADK's built-in `google_search` is model-side
+   grounding and can't be reliably domain-restricted, which is why this uses a
+   CSE.) A parent-controlled Vertex AI RAG corpus / NotebookLM Enterprise
+   notebook is the natural next extension here — NotebookLM has no supported
+   consumer API today, so it's noted as a future hook rather than built in.
+
+With none of the opt-in tools configured (and no API key at all), the agent
+still answers from the log summary + the curated skill via a deterministic
+offline fallback — that's the path the test suite exercises, since this repo's
+sandbox has no external credentials.
+
+**Sources & licensing.** `skills/child-guidance/SKILL.md` contains our *own*
+summaries — it does not reproduce any source's text — and cites UNICEF's *Art
+of Parenting*, CDC, AAP, WHO, USDA/FNS, and OpenStax *Lifespan Development*.
+Facts and guidance aren't copyrightable, so summary + attribution is clean
+regardless of a source's license; any *verbatim* quote added later must come
+only from the CC BY (OpenStax) or public-domain (US-government) sources. See
+`skills/child-guidance/SOURCES.md` for the per-source license table and the
+build-time TODO to confirm the UNICEF license before quoting it.
+
+**Not medical advice.** Insights are general information framed as "patterns to
+discuss with your pediatrician," never a diagnosis; parent questions are
+screened by the same security guardrail as chat before reaching the model.
 
 ## Development
 
@@ -268,6 +326,13 @@ Runtime resource (see `_AgentRuntimeBackend` in that file) — everything else
 about the dashboard is unchanged. The command prints a
 `https://nanny-<hash>-<region>.a.run.app`-style Service URL when it
 finishes; that's your backend.
+
+To turn on the InsightsAgent's opt-in research tools in the deploy, append
+their env vars to `--set-env-vars` (e.g.
+`NANNY_CONSENSUS_MCP_URL=...,GOOGLE_CSE_ID=...,GOOGLE_CSE_API_KEY=...`) — store
+any keys in Secret Manager via `--set-secrets` rather than inline. Unset, the
+agent runs on the curated `child-guidance` skill alone. See
+[Evidence-based insights](#evidence-based-insights).
 
 ### 3. Point the GitHub Pages frontend at it
 

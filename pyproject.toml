@@ -30,6 +30,13 @@ lint = [
 agent-engine = [
     "google-adk[gcp]>=2.3.0",
 ]
+# Opt-in tools for the InsightsAgent (nanny/research.py). Only needed to enable
+# the Consensus MCP integration; the scoped-search tool uses the stdlib and the
+# curated child-guidance skill + offline fallback need nothing extra, so the
+# agent is fully functional without this extra installed.
+research = [
+    "google-adk[mcp]>=2.3.0",
+]
 
 [tool.ruff]
 line-length = 88
