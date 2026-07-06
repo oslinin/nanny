@@ -63,8 +63,22 @@ class _FakeRag:
         self, text=None, rag_resources=None, rag_retrieval_config=None, **kw
     ):
         self.retrieve_calls.append((text, rag_resources))
-        ctx = types.SimpleNamespace(text="a relevant passage from the parent's book")
-        return types.SimpleNamespace(contexts=types.SimpleNamespace(contexts=[ctx]))
+        corpus_name = rag_resources[0].rag_corpus
+        files = self.files.get(corpus_name, [])
+        if not files:
+            ctx = types.SimpleNamespace(
+                text="a relevant passage from the parent's book",
+                source_display_name="",
+            )
+            return types.SimpleNamespace(contexts=types.SimpleNamespace(contexts=[ctx]))
+        contexts = [
+            types.SimpleNamespace(
+                text=f"a relevant passage from {f.display_name}",
+                source_display_name=f.display_name,
+            )
+            for f in files
+        ]
+        return types.SimpleNamespace(contexts=types.SimpleNamespace(contexts=contexts))
 
     def corpus_name_for(self, display_name):
         return next(
@@ -140,6 +154,43 @@ def test_get_or_create_reuses_existing_corpus(fake_rag):
     second = corpus_mod.get_or_create_corpus("alice")
     assert first == second
     assert len(fake_rag.list_corpora()) == 1
+
+
+# --- shared UNICEF corpus --------------------------------------------------
+
+
+def test_shared_unicef_corpus_starts_unresolved(fake_rag):
+    assert corpus_mod.resolve_shared_unicef_corpus() is None
+
+
+def test_seeding_the_shared_unicef_corpus_is_idempotent(fake_rag):
+    corpus_mod.add_file_to_shared_unicef_corpus(
+        "The Art of Parenting.pdf", b"%PDF data"
+    )
+    name = corpus_mod.resolve_shared_unicef_corpus()
+    assert name is not None
+
+    corpus_mod.add_file_to_shared_unicef_corpus(
+        "The Art of Parenting.pdf", b"%PDF data"
+    )
+    assert corpus_mod.get_or_create_shared_unicef_corpus() == name
+    shared = [
+        c
+        for c in fake_rag.list_corpora()
+        if c.display_name == corpus_mod._SHARED_UNICEF_DISPLAY_NAME
+    ]
+    assert len(shared) == 1
+
+
+def test_shared_corpus_display_name_cannot_collide_with_a_client_id(fake_rag):
+    corpus_mod.add_file_to_shared_unicef_corpus("guide.pdf", b"data")
+    # A client_id crafted to look like the shared corpus's name still gets its
+    # own, separate per-client corpus.
+    corpus_mod.add_file("shared-unicef-corpus", "notes.txt", b"data")
+    assert (
+        corpus_mod.resolve_corpus_name("shared-unicef-corpus")
+        != corpus_mod.resolve_shared_unicef_corpus()
+    )
 
 
 # --- HTTP endpoints -------------------------------------------------------
@@ -232,4 +283,58 @@ async def test_retrieval_tool_handles_no_corpus(fake_rag):
     tool = _PerClientRagRetrieval()
     ctx = types.SimpleNamespace(state={"client_id": "never-uploaded"})
     out = await tool.run_async(args={"query": "anything"}, tool_context=ctx)
-    assert "not uploaded" in out.lower()
+    assert "no relevant passages" in out.lower()
+
+
+async def test_retrieval_tool_includes_shared_unicef_corpus_when_enabled(fake_rag):
+    corpus_mod.add_file_to_shared_unicef_corpus("The Art of Parenting.pdf", b"data")
+    from nanny.research import _PerClientRagRetrieval
+
+    tool = _PerClientRagRetrieval()
+    ctx = types.SimpleNamespace(
+        state={
+            "client_id": "alice",
+            "enabled_sources": {"google_search": True, "unicef": True, "uploads": {}},
+        }
+    )
+    out = await tool.run_async(args={"query": "sleep"}, tool_context=ctx)
+    assert "The Art of Parenting.pdf" in out
+    queried = {resources[0].rag_corpus for _text, resources in fake_rag.retrieve_calls}
+    assert corpus_mod.resolve_shared_unicef_corpus() in queried
+
+
+async def test_retrieval_tool_skips_shared_unicef_corpus_when_disabled(fake_rag):
+    corpus_mod.add_file_to_shared_unicef_corpus("The Art of Parenting.pdf", b"data")
+    from nanny.research import _PerClientRagRetrieval
+
+    tool = _PerClientRagRetrieval()
+    ctx = types.SimpleNamespace(
+        state={
+            "client_id": "alice",
+            "enabled_sources": {"google_search": True, "unicef": False, "uploads": {}},
+        }
+    )
+    out = await tool.run_async(args={"query": "sleep"}, tool_context=ctx)
+    assert "no relevant passages" in out.lower()
+    assert fake_rag.retrieve_calls == []
+
+
+async def test_retrieval_tool_filters_out_disabled_upload_files(fake_rag):
+    corpus_mod.add_file("alice", "keep.pdf", b"data")
+    corpus_mod.add_file("alice", "hide.pdf", b"data")
+    from nanny.research import _PerClientRagRetrieval
+
+    tool = _PerClientRagRetrieval()
+    ctx = types.SimpleNamespace(
+        state={
+            "client_id": "alice",
+            "enabled_sources": {
+                "google_search": True,
+                "unicef": False,
+                "uploads": {"hide.pdf": False},
+            },
+        }
+    )
+    out = await tool.run_async(args={"query": "anything"}, tool_context=ctx)
+    assert "keep.pdf" in out
+    assert "hide.pdf" not in out

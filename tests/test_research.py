@@ -12,8 +12,11 @@ reloaded before server so the per-client data dir is fresh per test).
 """
 
 import importlib
+import types
 
 from fastapi.testclient import TestClient
+from google.adk.models.llm_request import LlmRequest
+from google.adk.tools.function_tool import FunctionTool
 
 from nanny.llm import _summarize_insights, build_insights_context
 
@@ -181,6 +184,47 @@ def test_build_insights_context_aggregates_by_type_and_day():
     # Yesterday's wet diaper is in all-time but not today.
     assert "wet" not in ctx["per_type_today"]
     assert ctx["per_type_all_time"]["wet"]["count"] == 1
+
+
+def _llm_request_with_google_search_tool():
+    from nanny.research import _search_reputable_child_health
+
+    llm_request = LlmRequest()
+    llm_request.append_tools([FunctionTool(_search_reputable_child_health)])
+    return llm_request
+
+
+def test_filter_disabled_tools_removes_google_search_when_off():
+    from nanny.research import _filter_disabled_tools_callback
+
+    llm_request = _llm_request_with_google_search_tool()
+    assert "_search_reputable_child_health" in llm_request.tools_dict
+
+    callback_context = types.SimpleNamespace(
+        state={"enabled_sources": {"google_search": False}}
+    )
+    result = _filter_disabled_tools_callback(callback_context, llm_request)
+
+    assert result is None
+    assert "_search_reputable_child_health" not in llm_request.tools_dict
+    remaining = [
+        d.name
+        for tool in (llm_request.config.tools or [])
+        for d in (tool.function_declarations or [])
+    ]
+    assert "_search_reputable_child_health" not in remaining
+
+
+def test_filter_disabled_tools_keeps_google_search_when_on_or_unset():
+    from nanny.research import _filter_disabled_tools_callback
+
+    for enabled_sources in ({"google_search": True}, {}):
+        llm_request = _llm_request_with_google_search_tool()
+        callback_context = types.SimpleNamespace(
+            state={"enabled_sources": enabled_sources}
+        )
+        _filter_disabled_tools_callback(callback_context, llm_request)
+        assert "_search_reputable_child_health" in llm_request.tools_dict
 
 
 def test_summarize_insights_empty_vs_populated():

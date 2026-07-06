@@ -43,7 +43,7 @@ from google.adk.sessions import InMemorySessionService
 from google.genai import types
 from pydantic import BaseModel
 
-from . import corpus, speech
+from . import corpus, sources, speech
 from .activity import KNOWN_ACTIVITY_TYPES, KNOWN_UNITS
 from .stores import get_store
 from .workflow import DEFAULT_CLIENT_ID, build_app
@@ -121,6 +121,17 @@ class ChatRequest(BaseModel):
 class InsightsRequest(BaseModel):
     # Empty question ⇒ proactive mode: the agent surfaces its own observation.
     question: str = ""
+
+
+class SourceDocumentUpdate(BaseModel):
+    source: str  # "unicef" or "upload"
+    enabled: bool
+    name: str | None = None  # required when source == "upload"
+
+
+class SourcesUpdateRequest(BaseModel):
+    google_search: bool | None = None
+    document: SourceDocumentUpdate | None = None
 
 
 class TurnResponse(BaseModel):
@@ -407,6 +418,79 @@ async def corpus_delete(filename: str, client_id: str = Depends(_client_id)) -> 
     if not removed:
         raise HTTPException(404, "no such reference")
     return {"ok": True, "filename": filename}
+
+
+def _sources_payload(client_id: str) -> dict:
+    """Builds the /api/sources response: current toggle states plus the
+    NotebookLM-style document list (shared UNICEF row, then personal
+    uploads), each only present when actually available server-side.
+
+    The UNICEF row is just a default entry in that list: any client can
+    remove it (client-scoped — it disables it for them only, since the
+    corpus itself is shared) and rely solely on their own uploads instead.
+    Once removed it drops out of this client's list entirely rather than
+    lingering unchecked, matching how a deleted upload disappears.
+    """
+    prefs = sources.get_prefs(client_id)
+    avail = sources.availability(client_id)
+
+    documents = []
+    if avail["unicef"] and prefs["unicef"]:
+        documents.append(
+            {
+                "name": "The Art of Parenting.pdf",
+                "source": "unicef",
+                "enabled": True,
+                "deletable": True,
+            }
+        )
+    if avail["uploads"]:
+        upload_prefs = prefs.get("uploads", {})
+        for filename in corpus.list_files(client_id):
+            documents.append(
+                {
+                    "name": filename,
+                    "source": "upload",
+                    "enabled": upload_prefs.get(filename, True),
+                    "deletable": True,
+                }
+            )
+
+    return {
+        "google_search": {
+            "available": avail["google_search"],
+            "enabled": prefs["google_search"],
+        },
+        "documents": documents,
+    }
+
+
+@app.get("/api/sources")
+async def sources_get(client_id: str = Depends(_client_id)) -> dict:
+    """Lists this client's evidence-source toggles and reference documents."""
+    return _sources_payload(client_id)
+
+
+@app.post("/api/sources", dependencies=[Depends(_require_api_token)])
+async def sources_post(
+    body: SourcesUpdateRequest, client_id: str = Depends(_client_id)
+) -> dict:
+    """Partial update of one toggle; returns the same shape as the GET."""
+    if body.google_search is not None:
+        sources.set_google_search(client_id, body.google_search)
+    elif body.document is not None:
+        doc = body.document
+        if doc.source == "unicef":
+            sources.set_unicef(client_id, doc.enabled)
+        elif doc.source == "upload":
+            if not doc.name:
+                raise HTTPException(400, "document.name is required for source=upload")
+            sources.set_upload_enabled(client_id, doc.name, doc.enabled)
+        else:
+            raise HTTPException(400, "document.source must be 'unicef' or 'upload'")
+    else:
+        raise HTTPException(400, "expected 'google_search' or 'document' in the body")
+    return _sources_payload(client_id)
 
 
 @app.get("/api/transcribe")

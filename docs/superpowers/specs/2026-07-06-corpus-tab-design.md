@@ -138,15 +138,21 @@ both the tool-filtering callback and the retrieval tool above.
   {
     "google_search": {"available": true, "enabled": true},
     "documents": [
-      {"name": "The Art of Parenting.pdf", "source": "unicef", "enabled": true, "deletable": false},
+      {"name": "The Art of Parenting.pdf", "source": "unicef", "enabled": true, "deletable": true},
       {"name": "my-notes.pdf", "source": "upload", "enabled": false, "deletable": true}
     ]
   }
   ```
-  The `unicef` document row is included only when `availability(...).unicef`
-  is true; personal-upload rows come from `corpus.list_files(client_id)`
-  merged with the client's `uploads` prefs (only present when
-  `availability(...).uploads` is true).
+  The `unicef` row is just a **default entry** in the list, not a special
+  fixture: it's included only when `availability(...).unicef` is true *and*
+  the client hasn't removed it (`prefs["unicef"]` is true) — once removed it
+  drops out of that client's list entirely rather than lingering unchecked,
+  the same as a deleted upload disappearing. "Removed" is client-scoped
+  (persists `unicef: false` in that client's own prefs file); the shared
+  corpus itself is untouched, so another client still sees the row until
+  they remove it too. Not every client has to use it. Personal-upload rows
+  come from `corpus.list_files(client_id)` merged with the client's
+  `uploads` prefs (only present when `availability(...).uploads` is true).
 - `POST /api/sources` — partial update, one of:
   - `{"google_search": true}`
   - `{"document": {"source": "unicef", "enabled": false}}`
@@ -165,10 +171,14 @@ Today view):
   reputable sites — CDC, AAP, WHO, healthychildren.org"), and a checkbox.
   Omitted if not available.
 - A **References** list, NotebookLM-style — one row per document:
-  - "The Art of Parenting" with a small "UNICEF" badge, checkbox, no delete
-    button. Omitted if not available.
+  - "The Art of Parenting" with a small "UNICEF" badge, checkbox, and a
+    delete button like any other row — it's a default entry a client can
+    remove and rely solely on their own uploads instead. Deleting it calls
+    `POST /api/sources` (disables it for this client) rather than
+    `/api/corpus`'s real file deletion, since the corpus is shared. Omitted
+    if not available or already removed by this client.
   - Each personally uploaded file: checkbox + delete button (today's
-    existing delete behavior, unchanged).
+    existing delete behavior, unchanged — a real `DELETE /api/corpus/{f}`).
   - The existing upload form below the list, shown only when uploads are
     available.
 - Toggling any checkbox fires the corresponding `POST /api/sources` call

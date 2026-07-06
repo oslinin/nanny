@@ -60,6 +60,12 @@ degrades to that same offline output rather than aborting the turn, so the app i
 always runnable. The
 deterministic nodes (ingest, postprocess, router, save) enforce schema and
 storage — "no hallucinated writes" is enforced by a node, not the LLM.
+`InsightsPrepNode` also loads the parent's Corpus-tab source toggles into
+state; `InsightsAgent`'s tools then honor them per turn (a disabled Google
+Search is removed from its tool list entirely, and disabled reference
+documents are filtered out of retrieval results before the model sees them) —
+no new graph nodes, since this is entirely within `InsightsAgent`'s existing
+tool set.
 `ClassifierAgent`'s output schema also carries an `is_question` escape hatch:
 without it, a schema requiring `activity_type`/`quantity`/`unit` would force
 the model to invent *something* for a message like "is my baby eating
@@ -72,9 +78,9 @@ fabricated record. Every node reads/writes the shared ADK session state
 
 All share one contract whether the graph runs in-process (local) or on Agent
 Runtime (deployed). Every endpoint that reads or writes a visitor's data (all of
-the below except the corpus/transcribe *status* GETs) requires `X-Nanny-Token`
-**only if** `NANNY_API_TOKEN` is set; the corpus/transcribe endpoints are inert
-unless their feature is enabled.
+the below except the sources/corpus/transcribe *status* GETs) requires
+`X-Nanny-Token` **only if** `NANNY_API_TOKEN` is set; the corpus/transcribe
+endpoints are inert unless their feature is enabled.
 
 | Method & path | Purpose |
 |---|---|
@@ -82,6 +88,7 @@ unless their feature is enabled.
 | `POST /api/chat` | Log from free text (`{"text": "he pooped at 3 PM"}`) |
 | `GET  /api/history` | This client's activity log |
 | `POST /api/insights` | Evidence-grounded answer; empty question = proactive |
+| `GET/POST /api/sources` | Per-parent evidence-source toggles (Corpus tab) |
 | `GET/POST /api/corpus`, `DELETE /api/corpus/{f}` | Per-parent reference upload (opt-in RAG) |
 | `GET/POST /api/transcribe` | Server-side speech-to-text (opt-in fallback) |
 
@@ -257,10 +264,17 @@ All off by default; each lights up only when its env var is set.
   `uv sync` already includes it) and/or `GOOGLE_CSE_ID` + `GOOGLE_CSE_API_KEY`
   (scoped search over cdc.gov,
   aap.org, who.int, …) for richer grounding. Always framed as "patterns to
-  discuss with your pediatrician," never a diagnosis.
+  discuss with your pediatrician," never a diagnosis. The parent controls
+  which of these the agent may actually draw on for a given turn from the
+  **Corpus** tab (`/api/sources`) — an unchecked source is hard-enforced,
+  removed from the model's tools or filtered out of retrieval results before
+  they ever reach the LLM, not just told not to use it.
 - **Bring your own references (RAG)** — set `NANNY_RAG_ENABLED=true` (on both the
   Agent Runtime and Cloud Run deploys) to give each parent a private Vertex AI
-  RAG corpus behind the `/api/corpus` endpoints. See `nanny/corpus.py`.
+  RAG corpus behind the `/api/corpus` endpoints, alongside one shared corpus
+  seeded from UNICEF's "Art of Parenting" guide that every parent can draw on
+  (`uv run python -m nanny.seed_unicef_corpus`, a one-time operator step — see
+  `nanny/corpus.py` and `nanny/seed_unicef_corpus.py`).
 - **Speak to log** — a 🎤 button uses the browser's Web Speech API (free, no
   keys). For browsers without it, set `NANNY_STT_ENABLED=true`
   (`uv sync --extra speech`) to enable the Cloud Speech-to-Text fallback at

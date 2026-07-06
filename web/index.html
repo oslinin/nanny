@@ -306,7 +306,6 @@
   .mic-hint { font-size: 0.76rem; color: var(--muted); margin: 0.5rem 0 0; }
 
   /* Insights */
-  @media (min-width: 820px) { .refs-panel { grid-column: 1 / -1; } }
   .insights-actions { margin-bottom: 0.7rem; }
   button.insight {
     appearance: none;
@@ -341,6 +340,24 @@
   form.refs-form { display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; }
   form.refs-form input[type=file] { flex: 1; font-size: 0.82rem; color: var(--muted); min-width: 12rem; }
   .refs-status { font-size: 0.78rem; color: var(--muted); margin: 0.55rem 0 0; min-height: 1em; }
+  ul.refs-list input[type=checkbox] { accent-color: var(--accent); width: 1.05rem; height: 1.05rem; flex: none; }
+
+  /* Corpus tab */
+  #view-corpus .panel { margin-bottom: 1.1rem; }
+  #view-corpus .panel:last-child { margin-bottom: 0; }
+  .corpus-toggle-row {
+    display: flex; align-items: center; justify-content: space-between; gap: 1rem;
+    cursor: pointer;
+  }
+  .corpus-toggle-label { font-size: 0.9rem; font-weight: 550; }
+  .corpus-toggle-hint { margin: 0.15rem 0 0; }
+  .corpus-doc-left { display: flex; align-items: center; gap: 0.55rem; min-width: 0; }
+  .corpus-doc-left span:not(.corpus-badge) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .corpus-badge {
+    flex: none; font-size: 0.66rem; font-weight: 700; letter-spacing: 0.03em;
+    text-transform: uppercase; color: var(--accent); background: var(--accent-soft);
+    border-radius: 999px; padding: 0.15rem 0.5rem;
+  }
 
   /* History list */
   .history-day { margin-bottom: 1.15rem; }
@@ -401,6 +418,7 @@
   <nav class="tabs" role="tablist" aria-label="Views">
     <button type="button" class="tab-btn active" data-view="today" role="tab" aria-selected="true">Today</button>
     <button type="button" class="tab-btn" data-view="history" role="tab" aria-selected="false">History</button>
+    <button type="button" class="tab-btn" data-view="corpus" role="tab" aria-selected="false">Corpus</button>
   </nav>
 
   <div id="view-today" class="view">
@@ -444,17 +462,6 @@
       <p class="mic-hint" id="mic-hint" hidden>Listening… speak your log, then pause.</p>
       <p class="disclaimer">Questions ending in “?” get evidence-based answers grounded in reputable guidance (CDC, AAP, WHO, UNICEF) — not medical advice. Discuss anything that concerns you with your pediatrician.</p>
     </section>
-
-    <section class="panel refs-panel" id="refs-panel" hidden>
-      <h2>Your references</h2>
-      <p class="refs-hint">Upload your own parenting references (PDF, text, or Markdown) — the insights assistant will draw on them for you, alongside the built-in guidance. Only you can see your own references.</p>
-      <ul class="refs-list" id="refs-list"></ul>
-      <form class="refs-form" id="refs-form">
-        <input id="refs-file" type="file" accept=".txt,.md,.pdf" />
-        <button type="submit" class="btn-primary">Upload</button>
-      </form>
-      <p class="refs-status" id="refs-status"></p>
-    </section>
   </div>
   </div>
 
@@ -464,6 +471,35 @@
       <div id="history-list" class="history-list">
         <p class="log-empty">Loading…</p>
       </div>
+    </section>
+  </div>
+
+  <div id="view-corpus" class="view" hidden>
+    <section class="panel" id="corpus-empty" hidden>
+      <h2>Corpus</h2>
+      <p class="refs-hint">No evidence sources are configured on this deployment yet — the insights assistant is still answering from the built-in guidance, just without these extras.</p>
+    </section>
+
+    <section class="panel" id="corpus-google" hidden>
+      <h2>Google Search</h2>
+      <label class="corpus-toggle-row">
+        <div>
+          <div class="corpus-toggle-label">Live web search</div>
+          <p class="refs-hint corpus-toggle-hint">Live search of reputable sites — CDC, AAP, WHO, healthychildren.org.</p>
+        </div>
+        <input type="checkbox" id="corpus-google-checkbox" />
+      </label>
+    </section>
+
+    <section class="panel" id="corpus-references" hidden>
+      <h2>References</h2>
+      <p class="refs-hint">Check which reference documents the insights assistant may draw on. Unchecking one stops it from being visible to the agent at all, not just from being cited.</p>
+      <ul class="refs-list" id="corpus-refs-list"></ul>
+      <form class="refs-form" id="corpus-refs-form" hidden>
+        <input id="corpus-refs-file" type="file" accept=".txt,.md,.pdf" />
+        <button type="submit" class="btn-primary">Upload</button>
+      </form>
+      <p class="refs-status" id="corpus-refs-status"></p>
     </section>
   </div>
 </div>
@@ -778,70 +814,165 @@ document.getElementById('insights-proactive').addEventListener('click', (e) => {
   requestInsight('').finally(() => { e.target.disabled = false; });
 });
 
-// Your References: the parent's own RAG corpus. The panel is hidden unless the
-// backend reports the feature enabled (NANNY_RAG_ENABLED, a Vertex deploy), so
-// local/default runs show nothing.
-const refsPanel = document.getElementById('refs-panel');
-const refsList = document.getElementById('refs-list');
-const refsStatus = document.getElementById('refs-status');
+// --- Corpus tab: Google Search toggle + NotebookLM-style reference list ----
+// /api/sources carries the toggle states and the merged document list (shared
+// UNICEF row + personal uploads); /api/corpus's `enabled` flag (unchanged,
+// gates upload/delete) is cached alongside it to decide whether to show the
+// upload form even when the parent has zero personal files so far.
+const corpusEmpty = document.getElementById('corpus-empty');
+const corpusGoogleSection = document.getElementById('corpus-google');
+const corpusGoogleCheckbox = document.getElementById('corpus-google-checkbox');
+const corpusReferences = document.getElementById('corpus-references');
+const corpusRefsList = document.getElementById('corpus-refs-list');
+const corpusRefsForm = document.getElementById('corpus-refs-form');
+const corpusRefsFile = document.getElementById('corpus-refs-file');
+const corpusRefsStatus = document.getElementById('corpus-refs-status');
 
-function renderRefs(files) {
-  refsList.innerHTML = '';
-  if (!files.length) {
-    const li = document.createElement('li');
-    li.className = 'refs-empty';
-    li.textContent = 'No references uploaded yet.';
-    refsList.appendChild(li);
-    return;
+let corpusUploadsAvailable = false;
+
+async function postSourcesUpdate(body) {
+  const res = await fetch(API_BASE + '/api/sources', {
+    method: 'POST',
+    headers: authHeaders({ 'Content-Type': 'application/json' }),
+    body: JSON.stringify(body),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.detail || 'Update failed');
+  return data;
+}
+
+function renderCorpusDocument(doc) {
+  const li = document.createElement('li');
+
+  const left = document.createElement('span');
+  left.className = 'corpus-doc-left';
+
+  const checkbox = document.createElement('input');
+  checkbox.type = 'checkbox';
+  checkbox.checked = !!doc.enabled;
+  checkbox.addEventListener('change', async () => {
+    checkbox.disabled = true;
+    try {
+      const data = await postSourcesUpdate({
+        document: { source: doc.source, name: doc.name, enabled: checkbox.checked },
+      });
+      renderCorpus(data);
+    } catch (err) {
+      checkbox.checked = !checkbox.checked;
+      corpusRefsStatus.textContent = 'Error: ' + err.message;
+    } finally {
+      checkbox.disabled = false;
+    }
+  });
+  left.appendChild(checkbox);
+
+  const name = document.createElement('span');
+  name.textContent = doc.name;
+  left.appendChild(name);
+
+  if (doc.source === 'unicef') {
+    const badge = document.createElement('span');
+    badge.className = 'corpus-badge';
+    badge.textContent = 'UNICEF';
+    left.appendChild(badge);
   }
-  files.forEach((name) => {
-    const li = document.createElement('li');
-    const span = document.createElement('span');
-    span.textContent = name;
-    li.appendChild(span);
+
+  li.appendChild(left);
+
+  if (doc.deletable) {
     const btn = document.createElement('button');
     btn.className = 'refs-remove';
     btn.title = 'Remove';
     btn.textContent = '✕';
-    btn.addEventListener('click', () => removeReference(name));
+    btn.addEventListener('click', () => removeCorpusReference(doc));
     li.appendChild(btn);
-    refsList.appendChild(li);
-  });
+  }
+
+  return li;
 }
 
-async function loadReferences() {
+function renderCorpus(sourcesData) {
+  const hasGoogle = !!(sourcesData && sourcesData.google_search && sourcesData.google_search.available);
+  const documents = (sourcesData && sourcesData.documents) || [];
+  const hasReferences = documents.length > 0 || corpusUploadsAvailable;
+
+  corpusEmpty.hidden = hasGoogle || hasReferences;
+  corpusGoogleSection.hidden = !hasGoogle;
+  if (hasGoogle) corpusGoogleCheckbox.checked = !!sourcesData.google_search.enabled;
+
+  corpusReferences.hidden = !hasReferences;
+  corpusRefsList.innerHTML = '';
+  if (!documents.length) {
+    const li = document.createElement('li');
+    li.className = 'refs-empty';
+    li.textContent = 'No references yet.';
+    corpusRefsList.appendChild(li);
+  } else {
+    documents.forEach((doc) => corpusRefsList.appendChild(renderCorpusDocument(doc)));
+  }
+  corpusRefsForm.hidden = !corpusUploadsAvailable;
+}
+
+async function loadCorpus() {
   try {
     const res = await fetch(API_BASE + '/api/corpus', { headers: authHeaders() });
-    const data = await res.json();
-    if (!data.enabled) { refsPanel.hidden = true; return; }
-    refsPanel.hidden = false;
-    renderRefs(data.files || []);
+    const corpusStatus = res.ok ? await res.json() : { enabled: false };
+    corpusUploadsAvailable = !!corpusStatus.enabled;
   } catch (err) {
-    refsPanel.hidden = true;
+    corpusUploadsAvailable = false;
+  }
+  try {
+    const res = await fetch(API_BASE + '/api/sources', { headers: authHeaders() });
+    renderCorpus(res.ok ? await res.json() : null);
+  } catch (err) {
+    renderCorpus(null);
   }
 }
 
-async function removeReference(name) {
-  refsStatus.textContent = 'Removing…';
+corpusGoogleCheckbox.addEventListener('change', async () => {
+  corpusGoogleCheckbox.disabled = true;
   try {
-    const res = await fetch(API_BASE + '/api/corpus/' + encodeURIComponent(name), {
+    const data = await postSourcesUpdate({ google_search: corpusGoogleCheckbox.checked });
+    renderCorpus(data);
+  } catch (err) {
+    corpusGoogleCheckbox.checked = !corpusGoogleCheckbox.checked;
+  } finally {
+    corpusGoogleCheckbox.disabled = false;
+  }
+});
+
+// The shared UNICEF doc is just a default entry in the list: removing it
+// disables it for this client only (the underlying shared corpus is
+// untouched — other clients still see it until they remove it too), so it
+// takes the /api/sources path rather than /api/corpus's real file deletion.
+async function removeCorpusReference(doc) {
+  corpusRefsStatus.textContent = 'Removing…';
+  try {
+    if (doc.source === 'unicef') {
+      const data = await postSourcesUpdate({
+        document: { source: 'unicef', enabled: false },
+      });
+      corpusRefsStatus.textContent = '';
+      renderCorpus(data);
+      return;
+    }
+    const res = await fetch(API_BASE + '/api/corpus/' + encodeURIComponent(doc.name), {
       method: 'DELETE', headers: authHeaders(),
     });
     if (!res.ok) throw new Error('Remove failed');
-    refsStatus.textContent = '';
-    loadReferences();
+    corpusRefsStatus.textContent = '';
+    loadCorpus();
   } catch (err) {
-    refsStatus.textContent = 'Error: ' + err.message;
+    corpusRefsStatus.textContent = 'Error: ' + err.message;
   }
 }
 
-document.getElementById('refs-form').addEventListener('submit', async (e) => {
+corpusRefsForm.addEventListener('submit', async (e) => {
   e.preventDefault();
-  const input = document.getElementById('refs-file');
-  if (!input.files.length) return;
+  if (!corpusRefsFile.files.length) return;
   const form = new FormData();
-  form.append('file', input.files[0]);
-  refsStatus.textContent = 'Uploading…';
+  form.append('file', corpusRefsFile.files[0]);
+  corpusRefsStatus.textContent = 'Uploading…';
   try {
     // No Content-Type header: the browser sets the multipart boundary itself.
     const res = await fetch(API_BASE + '/api/corpus', {
@@ -849,11 +980,11 @@ document.getElementById('refs-form').addEventListener('submit', async (e) => {
     });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(data.detail || 'Upload failed');
-    refsStatus.textContent = 'Uploaded.';
-    input.value = '';
-    loadReferences();
+    corpusRefsStatus.textContent = 'Uploaded.';
+    corpusRefsFile.value = '';
+    loadCorpus();
   } catch (err) {
-    refsStatus.textContent = 'Error: ' + err.message;
+    corpusRefsStatus.textContent = 'Error: ' + err.message;
   }
 });
 
@@ -951,6 +1082,7 @@ async function renderHistory() {
 const views = {
   today: document.getElementById('view-today'),
   history: document.getElementById('view-history'),
+  corpus: document.getElementById('view-corpus'),
 };
 
 document.querySelectorAll('.tab-btn').forEach((btn) => {
@@ -963,13 +1095,14 @@ document.querySelectorAll('.tab-btn').forEach((btn) => {
     });
     views.today.hidden = view !== 'today';
     views.history.hidden = view !== 'history';
-    // Fetch fresh each time the tab opens so newly logged activities show up.
+    views.corpus.hidden = view !== 'corpus';
+    // Fetch fresh each time a tab opens so newly logged/uploaded data shows up.
     if (view === 'history') renderHistory();
+    if (view === 'corpus') loadCorpus();
   });
 });
 
 renderRhythm();
-loadReferences();
 </script>
 </body>
 </html>

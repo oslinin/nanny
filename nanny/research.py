@@ -70,6 +70,32 @@ def _text_response(text: str) -> LlmResponse:
     )
 
 
+# The plain-function tool's name, as ADK's FunctionTool derives it
+# (func.__name__) — used to remove it from a turn's tool list below.
+_GOOGLE_SEARCH_TOOL_NAME = "_search_reputable_child_health"
+
+
+def _filter_disabled_tools_callback(callback_context, llm_request):
+    """Removes the Google Search tool from the model's tool list entirely for
+    a turn where the parent has switched it off in the Corpus tab.
+
+    Hard enforcement, per the Corpus-tab design: a tool absent from
+    ``llm_request`` cannot be called by the model no matter what the prompt
+    says, unlike a prompt instruction telling it not to use one.
+    """
+    enabled_sources = callback_context.state.get("enabled_sources") or {}
+    if enabled_sources.get("google_search", True):
+        return None
+    name = _GOOGLE_SEARCH_TOOL_NAME
+    llm_request.tools_dict.pop(name, None)
+    for tool in llm_request.config.tools or []:
+        if tool.function_declarations:
+            tool.function_declarations = [
+                d for d in tool.function_declarations if d.name != name
+            ]
+    return None
+
+
 def _insights_security_callback(callback_context, llm_request):
     """Screens the parent's question for prompt injection / secrets before the
     model call — the same guard the ClassifierAgent applies to chat input.
@@ -194,8 +220,20 @@ def _optional_research_tools() -> list:
     return tools
 
 
+async def _retrieve_passages(corpus_name: str, query: str) -> list[str]:
+    from vertexai import rag
+
+    response = await rag.async_retrieve_contexts(
+        text=query,
+        rag_resources=[rag.RagResource(rag_corpus=corpus_name)],
+        rag_retrieval_config=rag.RagRetrievalConfig(top_k=5),
+    )
+    return list(response.contexts.contexts)
+
+
 class _PerClientRagRetrieval(BaseRetrievalTool):
-    """Retrieves from *this parent's own* Vertex RAG corpus.
+    """Retrieves from the shared UNICEF corpus and *this parent's own* Vertex
+    RAG corpus, subject to the parent's Corpus-tab source toggles.
 
     A custom ``BaseRetrievalTool`` rather than ADK's built-in
     ``VertexAiRagRetrieval`` on purpose: that one pins a fixed set of corpora at
@@ -204,37 +242,60 @@ class _PerClientRagRetrieval(BaseRetrievalTool):
     and queries only that client's corpus — the same per-visitor isolation as
     the activity log. Only attached when ``NANNY_RAG_ENABLED`` is on, so it
     never runs (and never imports ``vertexai``) in local dev/tests.
+
+    Enforcement of each checkbox happens here, in tool code, before any
+    passage reaches the model — not via a prompt instruction:
+    - The shared UNICEF corpus is queried only when ``unicef`` is enabled.
+    - Passages from the client's own corpus are dropped when their source
+      file is disabled in ``uploads`` (default enabled if unlisted, so a
+      freshly uploaded file is usable immediately).
     """
 
     def __init__(self) -> None:
         super().__init__(
             name="search_my_references",
             description=(
-                "Search the parent's own uploaded reference materials (books, "
-                "handouts) for passages relevant to the query. Use this when the "
-                "parent asks something their own references may cover; cite that "
-                "you drew on their uploaded material."
+                "Search reference materials the parent has enabled — the shared "
+                "UNICEF parenting guide and/or their own uploaded references — "
+                "for passages relevant to the query. Cite that you drew on this "
+                "material when you use it."
             ),
         )
 
     async def run_async(self, *, args: dict, tool_context) -> str:
+        from . import sources as sources_mod
         from .workflow import DEFAULT_CLIENT_ID
 
         client_id = tool_context.state.get("client_id") or DEFAULT_CLIENT_ID
+        enabled_sources = tool_context.state.get("enabled_sources")
+        if enabled_sources is None:
+            enabled_sources = sources_mod.get_prefs(client_id)
         query = args.get("query") or ""
-        corpus_name = corpus.resolve_corpus_name(client_id)
-        if not corpus_name:
-            return "The parent has not uploaded any reference materials."
-        from vertexai import rag
 
-        response = await rag.async_retrieve_contexts(
-            text=query,
-            rag_resources=[rag.RagResource(rag_corpus=corpus_name)],
-            rag_retrieval_config=rag.RagRetrievalConfig(top_k=5),
-        )
-        passages = [
-            c.text for c in response.contexts.contexts if getattr(c, "text", "")
-        ]
+        passages: list[str] = []
+
+        if enabled_sources.get("unicef", True):
+            shared_corpus = corpus.resolve_shared_unicef_corpus()
+            if shared_corpus:
+                passages.extend(
+                    c.text
+                    for c in await _retrieve_passages(shared_corpus, query)
+                    if getattr(c, "text", "")
+                )
+
+        corpus_name = corpus.resolve_corpus_name(client_id)
+        if corpus_name:
+            upload_prefs = enabled_sources.get("uploads") or {}
+            for c in await _retrieve_passages(corpus_name, query):
+                text = getattr(c, "text", "")
+                if not text:
+                    continue
+                filename = getattr(c, "source_display_name", "") or getattr(
+                    c, "source_uri", ""
+                )
+                if upload_prefs.get(filename, True):
+                    passages.append(text)
+
         if not passages:
             return "No relevant passages found in the parent's references."
         return "\n\n---\n\n".join(passages)
@@ -286,9 +347,12 @@ def build_insights_agent() -> LlmAgent:
         output_key="response_text",
         tools=tools,
         # Security guard runs first; only if it doesn't block does the offline
-        # fallback get a chance to short-circuit the real model call.
+        # fallback get a chance to short-circuit the real model call. Tool
+        # filtering runs regardless (harmless if the offline fallback ends up
+        # short-circuiting the turn right after).
         before_model_callback=[
             _insights_security_callback,
+            _filter_disabled_tools_callback,
             _insights_offline_fallback_callback,
         ],
         on_model_error_callback=_insights_model_error_callback,

@@ -48,6 +48,7 @@ from .activity import ActivityError, BabyActivity
 from .agents import build_classifier_agent, build_responder_agent
 from .llm import build_insights_context
 from .research import build_insights_agent
+from .sources import get_prefs as get_source_prefs
 from .store import Store
 
 logger = logging.getLogger("nanny.workflow")
@@ -140,6 +141,7 @@ def build_app(store_resolver: Callable[[str], Store]) -> App:
         ctx.state["insights_context"] = context
         ctx.state["insights_context_json"] = json.dumps(context)
         ctx.state.setdefault("question", "")
+        ctx.state["enabled_sources"] = get_source_prefs(client_id)
         ctx.state["last_status"] = "ok"
 
     classifier_agent = build_classifier_agent()

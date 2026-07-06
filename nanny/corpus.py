@@ -8,6 +8,11 @@ activity log — named deterministically so both this module (corpus management,
 run from the dashboard) and the retrieval tool (run inside the agent) resolve
 the same corpus without any shared mapping.
 
+Also manages **one shared** corpus (seeded with UNICEF's "Art of Parenting"
+guide, see ``nanny/seed_unicef_corpus.py``) that every client's InsightsAgent
+can draw on — distinct from any per-client corpus, and reachable only through
+the fixed display name below, never through a client-supplied id.
+
 Gated entirely behind ``NANNY_RAG_ENABLED``: off (the default, and every local
 /test/sandbox run) this module makes no Vertex calls at all and the corpus
 endpoints report the feature disabled. On (a real Vertex deployment) the
@@ -24,6 +29,10 @@ import tempfile
 # One shared prefix so a client's corpus is found by display name from either
 # side of the Agent Runtime split, with no persisted corpus-id mapping.
 _DISPLAY_PREFIX = "nanny-corpus-"
+
+# A fixed name distinct from _DISPLAY_PREFIX's per-client pattern above, so no
+# client_id can ever collide with — or resolve to — the shared corpus.
+_SHARED_UNICEF_DISPLAY_NAME = "nanny-shared-unicef-corpus"
 
 # Vertex RAG parses these natively (no local text extraction needed).
 ALLOWED_EXTENSIONS = (".txt", ".md", ".pdf")
@@ -81,15 +90,14 @@ def get_or_create_corpus(client_id: str) -> str:
     return corpus.name
 
 
-def add_file(client_id: str, filename: str, data: bytes) -> None:
-    """Uploads one reference file into the client's corpus.
+def _upload_file_to_corpus(corpus_name: str, filename: str, data: bytes) -> None:
+    """Uploads one file into an already-resolved corpus.
 
     The bytes are written to a temp path because ``rag.upload_file`` takes a
     filesystem path; Vertex RAG extracts the text (PDF/TXT/MD) on ingest.
     """
     from vertexai import rag
 
-    corpus_name = get_or_create_corpus(client_id)
     suffix = os.path.splitext(filename)[1] or ".txt"
     with tempfile.NamedTemporaryFile(suffix=suffix) as tmp:
         tmp.write(data)
@@ -99,6 +107,12 @@ def add_file(client_id: str, filename: str, data: bytes) -> None:
             path=tmp.name,
             display_name=filename,
         )
+
+
+def add_file(client_id: str, filename: str, data: bytes) -> None:
+    """Uploads one reference file into the client's corpus."""
+    corpus_name = get_or_create_corpus(client_id)
+    _upload_file_to_corpus(corpus_name, filename, data)
 
 
 def list_files(client_id: str) -> list[str]:
@@ -123,3 +137,37 @@ def delete_file(client_id: str, filename: str) -> bool:
             rag.delete_file(name=f.name, corpus_name=corpus_name)
             return True
     return False
+
+
+def resolve_shared_unicef_corpus() -> str | None:
+    """Returns the shared UNICEF corpus's resource name, or None if it hasn't
+    been seeded yet (see ``nanny/seed_unicef_corpus.py``)."""
+    from vertexai import rag
+
+    _init_vertex()
+    for corpus in rag.list_corpora():
+        if corpus.display_name == _SHARED_UNICEF_DISPLAY_NAME:
+            return corpus.name
+    return None
+
+
+def get_or_create_shared_unicef_corpus() -> str:
+    """Returns the shared UNICEF corpus's resource name, creating it on first
+    use. Only called by the one-time seeding script — never from a request
+    path, so no client can trigger its creation."""
+    from vertexai import rag
+
+    existing = resolve_shared_unicef_corpus()
+    if existing:
+        return existing
+    corpus = rag.create_corpus(
+        display_name=_SHARED_UNICEF_DISPLAY_NAME,
+        description="Shared UNICEF parenting guidance, available to every parent.",
+    )
+    return corpus.name
+
+
+def add_file_to_shared_unicef_corpus(filename: str, data: bytes) -> None:
+    """Uploads a file into the shared UNICEF corpus. Seeding-script only."""
+    corpus_name = get_or_create_shared_unicef_corpus()
+    _upload_file_to_corpus(corpus_name, filename, data)
