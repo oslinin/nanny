@@ -64,12 +64,28 @@ def test_token_required_when_configured(tmp_path, monkeypatch):
     assert authenticated.status_code == 200
 
 
-def test_history_endpoint_is_not_gated_by_token(tmp_path, monkeypatch):
-    # /api/history is read-only; only the two mutating endpoints require the token.
+def test_history_endpoint_is_gated_by_token_when_configured(tmp_path, monkeypatch):
+    # A visitor's activity log is private; when a token is configured, reads of
+    # it require the token too — not just the mutating endpoints.
     server_module = _reload_server(tmp_path, monkeypatch, NANNY_API_TOKEN="secret123")
     client = TestClient(server_module.app)
-    resp = client.get("/api/history")
-    assert resp.status_code == 200
+
+    assert client.get("/api/history").status_code == 401
+    assert (
+        client.get("/api/history", headers={"X-Nanny-Token": "wrong"}).status_code
+        == 401
+    )
+    assert (
+        client.get("/api/history", headers={"X-Nanny-Token": "secret123"}).status_code
+        == 200
+    )
+
+
+def test_history_endpoint_open_without_token_by_default(tmp_path, monkeypatch):
+    # With no token configured (local dev), history stays open as before.
+    server_module = _reload_server(tmp_path, monkeypatch)
+    client = TestClient(server_module.app)
+    assert client.get("/api/history").status_code == 200
 
 
 def test_cors_headers_present_for_allowed_origin(tmp_path, monkeypatch):

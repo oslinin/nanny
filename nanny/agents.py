@@ -48,8 +48,25 @@ _UnitEnum = StrEnum("_UnitEnum", {v: v for v in KNOWN_UNITS})
 
 
 class _ExtractedActivity(BaseModel):
-    """Constrained JSON schema for ClassifierAgent's structured output."""
+    """Constrained JSON schema for ClassifierAgent's structured output.
 
+    ``is_question`` is the escape hatch that keeps a forced structured output
+    honest: without it, a schema requiring activity_type/quantity/unit leaves
+    the model no way to say "there's no activity here" when the message is a
+    question or otherwise not a caregiving event — it would have to hallucinate
+    *something* to satisfy the schema. Setting it true lets classifier_postprocess_node
+    (workflow.py) reject the turn instead of saving a fabricated record.
+    """
+
+    is_question: bool = Field(
+        description=(
+            "True if the message is a question, request for advice, greeting, or "
+            "anything else that isn't reporting a caregiving activity that already "
+            "happened; false only if it describes a concrete activity to log. When "
+            "true, the other fields are ignored — fill them with any placeholder "
+            "values rather than guessing."
+        )
+    )
     activity_type: _ActivityTypeEnum
     quantity: float = Field(description="Numeric amount; use 1 for simple counts.")
     unit: _UnitEnum
@@ -67,9 +84,12 @@ def _sentinel_extraction_json(now_iso: str) -> str:
     Never actually saved — ``classifier_postprocess_node`` in workflow.py
     always checks the ``security_blocked`` / ``heuristic_error`` state flags
     first and routes to the error branch before this content would be used.
+    ``is_question`` is set true here too (though also never read for these two
+    paths) purely to stay schema-valid.
     """
     return json.dumps(
         {
+            "is_question": True,
             "activity_type": KNOWN_ACTIVITY_TYPES[0],
             "quantity": 0.0,
             "unit": KNOWN_UNITS[0],
@@ -100,12 +120,12 @@ def _classifier_security_callback(callback_context, llm_request):
     return _text_response(_sentinel_extraction_json(now_iso))
 
 
-def _classifier_offline_fallback_callback(callback_context, llm_request):
-    """Runs the heuristic extractor instead of calling Gemini when no model
-    backend (AI-Studio key or Vertex) is configured."""
-    if _model_available():
-        return None
-    state = callback_context.state
+def _classifier_heuristic_response(state) -> LlmResponse:
+    """Produces the offline heuristic extraction as a synthetic LlmResponse.
+
+    Shared by the offline-fallback (no key) and model-error (live call failed)
+    callbacks so both degrade to the exact same deterministic path.
+    """
     text = state.get("chat_text") or ""
     now_iso = state.get("now_iso") or ""
     state["used_llm_extraction"] = False
@@ -114,7 +134,33 @@ def _classifier_offline_fallback_callback(callback_context, llm_request):
     except ActivityError as exc:
         state["heuristic_error"] = str(exc)
         return _text_response(_sentinel_extraction_json(now_iso))
-    return _text_response(json.dumps(activity.to_dict()))
+    return _text_response(json.dumps({"is_question": False, **activity.to_dict()}))
+
+
+def _classifier_offline_fallback_callback(callback_context, llm_request):
+    """Runs the heuristic extractor instead of calling Gemini when no model
+    backend (AI-Studio key or Vertex) is configured."""
+    if _model_available():
+        return None
+    return _classifier_heuristic_response(callback_context.state)
+
+
+def _classifier_model_error_callback(*, callback_context, llm_request, error):
+    """Degrades to the heuristic extractor when a configured model call fails
+    at runtime (invalid key, quota exhausted, timeout) instead of letting the
+    exception abort the whole turn."""
+    logger.warning(
+        "ClassifierAgent: model call failed (%s); falling back to heuristic", error
+    )
+    return _classifier_heuristic_response(callback_context.state)
+
+
+def _responder_template_response(state) -> LlmResponse:
+    """Produces the template confirmation as a synthetic LlmResponse. Shared by
+    the offline-fallback (no key) and model-error (live call failed) callbacks."""
+    save_result = state.get("save_result") or {}
+    state["used_llm_response"] = False
+    return _text_response(_synthesize_template(save_result))
 
 
 def _responder_offline_fallback_callback(callback_context, llm_request):
@@ -122,20 +168,34 @@ def _responder_offline_fallback_callback(callback_context, llm_request):
     model backend (AI-Studio key or Vertex) is configured."""
     if _model_available():
         return None
-    state = callback_context.state
-    save_result = state.get("save_result") or {}
-    state["used_llm_response"] = False
-    return _text_response(_synthesize_template(save_result))
+    return _responder_template_response(callback_context.state)
+
+
+def _responder_model_error_callback(*, callback_context, llm_request, error):
+    """Degrades to the template confirmation when a configured model call fails
+    at runtime. The activity is already saved by ``SaveActivityNode`` before
+    this agent runs, so a model failure must not fail the turn — only the
+    (cosmetic) confirmation sentence changes."""
+    logger.warning(
+        "ResponderAgent: model call failed (%s); falling back to template", error
+    )
+    return _responder_template_response(callback_context.state)
 
 
 _CLASSIFIER_INSTRUCTION = """\
 You extract structured infant-care activity records from free text for a
-baby activity tracker. Always resolve relative or partial time phrases
-("3 PM", "just now", "an hour ago") into an absolute ISO-8601 timestamp using
-the current time given below as reference. activity_type must be exactly one
-of: {activity_types}. unit must be exactly one of: {units} (oz for
-milk/bottle volumes, grams for solids, count for diaper/poop events). Never
-invent data that is not present or implied in the text.
+baby activity tracker. First decide whether the message is actually reporting
+something that happened, or is instead a question, a request for advice, a
+greeting, or anything else with no activity to log ("is my baby eating
+enough", "how much should he nap", "what do you think") — set is_question to
+true for any of those and stop there; do not guess at activity_type/quantity
+just to fill the schema. Only when is_question is false, extract the record:
+always resolve relative or partial time phrases ("3 PM", "just now", "an hour
+ago") into an absolute ISO-8601 timestamp using the current time given below
+as reference. activity_type must be exactly one of: {activity_types}. unit
+must be exactly one of: {units} (oz for milk/bottle volumes, grams for
+solids, count for diaper/poop events). Never invent data that is not present
+or implied in the text.
 
 Current time (ISO-8601): {{now_iso}}
 
@@ -174,6 +234,9 @@ def build_classifier_agent() -> LlmAgent:
             _classifier_security_callback,
             _classifier_offline_fallback_callback,
         ],
+        # If a live model call is attempted and fails, degrade to the heuristic
+        # rather than aborting the turn.
+        on_model_error_callback=_classifier_model_error_callback,
     )
 
 
@@ -188,4 +251,5 @@ def build_responder_agent() -> LlmAgent:
         output_key="response_text",
         tools=[SkillToolset(skills=[skill])],
         before_model_callback=[_responder_offline_fallback_callback],
+        on_model_error_callback=_responder_model_error_callback,
     )

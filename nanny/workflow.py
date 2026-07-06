@@ -74,6 +74,14 @@ def build_app(store_resolver: Callable[[str], Store]) -> App:
         Quick-tap payloads are validated and passed through unchanged,
         bypassing the LLM entirely. Chat text is routed to ClassifierAgent.
         """
+        # The ADK session is persistent (keyed by client id), so flags a
+        # previous turn set — a security block, a validation/heuristic error —
+        # would otherwise leak into this turn and, e.g., permanently reject a
+        # client after one flagged message. Clear them at the top of every turn.
+        ctx.state["security_blocked"] = False
+        ctx.state["heuristic_error"] = ""
+        ctx.state["error"] = ""
+
         mode = ctx.state.get("input_mode")
         if mode == "quick_tap":
             try:
@@ -154,8 +162,20 @@ def build_app(store_resolver: Callable[[str], Store]) -> App:
             ctx.state["last_status"] = "error"
             ctx.route = "error"
             return
+        extracted = ctx.state.get("extracted_activity") or {}
+        if extracted.get("is_question"):
+            # The escape hatch: without this, a schema requiring
+            # activity_type/quantity/unit would force the model to hallucinate
+            # a fake record for a question rather than admit there's nothing to
+            # log — this is what stops that from ever reaching storage.
+            ctx.state["error"] = (
+                "that sounds like a question, not something to log — try asking "
+                "it under Insights instead"
+            )
+            ctx.state["last_status"] = "error"
+            ctx.route = "error"
+            return
         try:
-            extracted = ctx.state.get("extracted_activity") or {}
             activity = BabyActivity.from_dict(extracted).validate()
         except ActivityError as exc:
             logger.info("ClassifierPostProcessNode: rejecting record: %s", exc)

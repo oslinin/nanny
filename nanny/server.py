@@ -317,7 +317,7 @@ async def chat(req: ChatRequest, client_id: str = Depends(_client_id)) -> TurnRe
     )
 
 
-@app.get("/api/history")
+@app.get("/api/history", dependencies=[Depends(_require_api_token)])
 async def history(client_id: str = Depends(_client_id)) -> list[dict]:
     final_state = await _query(client_id, {"input_mode": "get_history"}, "history")
     return final_state.get("history") or []

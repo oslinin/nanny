@@ -92,16 +92,32 @@ def _insights_security_callback(callback_context, llm_request):
     return _text_response(f"Sorry, I can't help with that: {reason}")
 
 
+def _insights_summary_response(state) -> LlmResponse:
+    """Produces the deterministic, log-grounded summary as a synthetic
+    LlmResponse. Shared by the offline-fallback (no key) and model-error (live
+    call failed) callbacks so both degrade to the exact same summary."""
+    context = state.get("insights_context") or {}
+    question = state.get("question") or ""
+    state["used_llm_response"] = False
+    return _text_response(_summarize_insights(context, question))
+
+
 def _insights_offline_fallback_callback(callback_context, llm_request):
     """Returns a deterministic, log-grounded summary instead of calling Gemini
     when no model backend (AI-Studio key or Vertex) is configured."""
     if _model_available():
         return None
-    state = callback_context.state
-    context = state.get("insights_context") or {}
-    question = state.get("question") or ""
-    state["used_llm_response"] = False
-    return _text_response(_summarize_insights(context, question))
+    return _insights_summary_response(callback_context.state)
+
+
+def _insights_model_error_callback(*, callback_context, llm_request, error):
+    """Degrades to the offline summary when a configured model call fails at
+    runtime (invalid key, quota exhausted, timeout) instead of aborting."""
+    logger.warning(
+        "InsightsAgent: model call failed (%s); falling back to offline summary",
+        error,
+    )
+    return _insights_summary_response(callback_context.state)
 
 
 def _search_reputable_child_health(query: str) -> dict:
@@ -275,4 +291,5 @@ def build_insights_agent() -> LlmAgent:
             _insights_security_callback,
             _insights_offline_fallback_callback,
         ],
+        on_model_error_callback=_insights_model_error_callback,
     )
