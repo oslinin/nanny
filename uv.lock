@@ -2082,7 +2082,7 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "fastapi" },
-    { name = "google-adk" },
+    { name = "google-adk", extra = ["mcp"] },
     { name = "python-multipart" },
     { name = "uvicorn" },
 ]
@@ -2095,9 +2095,6 @@ lint = [
     { name = "codespell" },
     { name = "ruff" },
     { name = "ty" },
-]
-research = [
-    { name = "google-adk", extra = ["mcp"] },
 ]
 speech = [
     { name = "google-cloud-speech" },
@@ -2114,16 +2111,15 @@ dev = [
 requires-dist = [
     { name = "codespell", marker = "extra == 'lint'", specifier = ">=2.2.0,<3.0.0" },
     { name = "fastapi", specifier = ">=0.139.0" },
-    { name = "google-adk", specifier = ">=2.3.0" },
     { name = "google-adk", extras = ["gcp"], marker = "extra == 'agent-engine'", specifier = ">=2.3.0" },
-    { name = "google-adk", extras = ["mcp"], marker = "extra == 'research'", specifier = ">=2.3.0" },
+    { name = "google-adk", extras = ["mcp"], specifier = ">=2.3.0" },
     { name = "google-cloud-speech", marker = "extra == 'speech'", specifier = ">=2.27.0" },
     { name = "python-multipart", specifier = ">=0.0.9" },
     { name = "ruff", marker = "extra == 'lint'", specifier = ">=0.15.20" },
     { name = "ty", marker = "extra == 'lint'", specifier = ">=0.0.1a0" },
     { name = "uvicorn", specifier = ">=0.50.0" },
 ]
-provides-extras = ["lint", "agent-engine", "research", "speech"]
+provides-extras = ["lint", "agent-engine", "speech"]
 
 [package.metadata.requires-dev]
 dev = [

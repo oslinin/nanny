@@ -6,7 +6,10 @@ readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
     "fastapi>=0.139.0",
-    "google-adk>=2.3.0",
+    # [mcp] gives InsightsAgent's opt-in Consensus MCP tool (nanny/research.py)
+    # its McpToolset out of the box; a no-op if NANNY_CONSENSUS_MCP_URL is
+    # never set, so bundling it unconditionally costs nothing at runtime.
+    "google-adk[mcp]>=2.3.0",
     "python-multipart>=0.0.9",
     "uvicorn>=0.50.0",
 ]
@@ -30,13 +33,6 @@ lint = [
 # separate image; a no-op if that env var is never set.
 agent-engine = [
     "google-adk[gcp]>=2.3.0",
-]
-# Opt-in tools for the InsightsAgent (nanny/research.py). Only needed to enable
-# the Consensus MCP integration; the scoped-search tool uses the stdlib and the
-# curated child-guidance skill + offline fallback need nothing extra, so the
-# agent is fully functional without this extra installed.
-research = [
-    "google-adk[mcp]>=2.3.0",
 ]
 # Needed only for the opt-in server-side speech-to-text fallback
 # (nanny/speech.py, NANNY_STT_ENABLED). The mic button's default engine is the
