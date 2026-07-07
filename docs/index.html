@@ -15,9 +15,9 @@
 <title>Nanny — Baby Activity Tracker</title>
 <script>
   // Fill these in after `gcloud run deploy` prints your service URL.
-  window.NANNY_API_BASE = "https://REPLACE-WITH-YOUR-CLOUD-RUN-URL.a.run.app";
+  window.NANNY_API_BASE = "https://nanny-msq2vcvbjq-ue.a.run.app";
   // Only needed if you deployed with NANNY_API_TOKEN set (see README).
-  window.NANNY_API_TOKEN = "";
+  window.NANNY_API_TOKEN = "1349f20b5ad1188d0aec2f767e54eafa";
 </script>
 <style>
   :root {
@@ -378,11 +378,14 @@
     font-size: 0.78rem; font-weight: 600; color: var(--muted); letter-spacing: 0.01em;
   }
   .baby-field > span em { font-style: normal; font-weight: 500; color: var(--accent); }
-  .baby-form input, .baby-form select {
+  .baby-form input, .baby-form select, .baby-form textarea {
     padding: 0.55rem 0.7rem; border-radius: 10px; border: 1px solid var(--border);
     background: var(--bg); color: var(--ink); font-size: 0.9rem; font-family: var(--font-body);
   }
-  .baby-form input:focus, .baby-form select:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .baby-form textarea { resize: vertical; }
+  .baby-form input:focus, .baby-form select:focus, .baby-form textarea:focus {
+    outline: 2px solid var(--accent); outline-offset: 1px;
+  }
   .baby-row { display: grid; grid-template-columns: 1fr 1fr; gap: 0.9rem; }
   .baby-actions { display: flex; align-items: center; gap: 0.8rem; margin-top: 0.2rem; }
   .baby-actions .refs-status { margin: 0; }
@@ -553,6 +556,10 @@
             <input id="baby-height" type="number" min="0" max="200" step="0.5" inputmode="decimal" />
           </label>
         </div>
+        <label class="baby-field">
+          <span>Allergies</span>
+          <textarea id="baby-allergies" maxlength="200" rows="2" placeholder="e.g. peanuts, eggs"></textarea>
+        </label>
         <div class="baby-actions">
           <button type="submit" class="btn-primary">Save</button>
           <span class="refs-status" id="baby-status"></span>
@@ -1262,6 +1269,7 @@ const babySex = document.getElementById('baby-sex');
 const babyBirthdate = document.getElementById('baby-birthdate');
 const babyWeight = document.getElementById('baby-weight');
 const babyHeight = document.getElementById('baby-height');
+const babyAllergies = document.getElementById('baby-allergies');
 const babyAge = document.getElementById('baby-age');
 const babyStatus = document.getElementById('baby-status');
 
@@ -1272,6 +1280,7 @@ function fillBaby(p) {
   babyBirthdate.value = p.birthdate || '';
   babyWeight.value = p.weight_kg != null ? p.weight_kg : '';
   babyHeight.value = p.height_cm != null ? p.height_cm : '';
+  babyAllergies.value = p.allergies || '';
   babyAge.textContent = p.age && p.age.label ? '· ' + p.age.label : '';
 }
 
@@ -1284,7 +1293,7 @@ async function loadBaby() {
 
 babyForm.addEventListener('submit', async (e) => {
   e.preventDefault();
-  const body = { name: babyName.value.trim(), sex: babySex.value };
+  const body = { name: babyName.value.trim(), sex: babySex.value, allergies: babyAllergies.value.trim() };
   if (babyBirthdate.value) body.birthdate = babyBirthdate.value;
   if (babyWeight.value !== '') body.weight_kg = parseFloat(babyWeight.value);
   if (babyHeight.value !== '') body.height_cm = parseFloat(babyHeight.value);
