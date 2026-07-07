@@ -82,6 +82,51 @@ async def test_chat_extracts_via_heuristic_when_no_api_key(store, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_insights_folds_baby_profile_into_context(store, tmp_path, monkeypatch):
+    # Offline (no API key): the InsightsAgent degrades to the deterministic
+    # summary, which now leads with the baby's name/age from the profile.
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+    monkeypatch.setenv("NANNY_DATA_DIR", str(tmp_path))
+    import importlib
+
+    import nanny.profile as profile_mod
+    import nanny.workflow as workflow_mod
+
+    importlib.reload(profile_mod)
+    importlib.reload(workflow_mod)
+    monkeypatch.setattr(workflow_mod, "baby_snapshot", profile_mod.snapshot)
+    profile_mod.set_profile("test-user", {"name": "Mia", "birthdate": "2026-01-07"})
+
+    adk_app = workflow_mod.build_app(lambda _client_id: store)
+    session_service = InMemorySessionService()
+    await session_service.create_session(
+        app_name=APP_NAME, user_id=USER_ID, session_id="ins1", state={}
+    )
+    runner = Runner(app=adk_app, session_service=session_service)
+    async for _ in runner.run_async(
+        user_id=USER_ID,
+        session_id="ins1",
+        new_message=types.Content(role="user", parts=[types.Part(text="q")]),
+        state_delta={
+            "input_mode": "insights",
+            "question": "how are we doing?",
+            "now_iso": "2026-07-07T12:00:00+00:00",
+            "client_id": "test-user",
+        },
+    ):
+        pass
+    session = await session_service.get_session(
+        app_name=APP_NAME, user_id=USER_ID, session_id="ins1"
+    )
+    state = session.state
+    assert state["insights_context"]["baby"]["name"] == "Mia"
+    assert state["insights_context"]["baby"]["age"]["label"] == "6 months old"
+    assert "Mia" in state["response_text"]
+    assert "6 months old" in state["response_text"]
+
+
+@pytest.mark.asyncio
 async def test_chat_with_unrecognized_text_routes_to_error(store):
     now_iso = datetime.now(UTC).isoformat()
     state = await _run_turn(

@@ -368,6 +368,22 @@
   .refs-status { font-size: 0.78rem; color: var(--muted); margin: 0.55rem 0 0; min-height: 1em; }
   ul.refs-list input[type=checkbox] { accent-color: var(--accent); width: 1.05rem; height: 1.05rem; flex: none; }
 
+  /* Baby tab */
+  .baby-form { display: flex; flex-direction: column; gap: 0.9rem; }
+  .baby-field { display: flex; flex-direction: column; gap: 0.35rem; }
+  .baby-field > span {
+    font-size: 0.78rem; font-weight: 600; color: var(--muted); letter-spacing: 0.01em;
+  }
+  .baby-field > span em { font-style: normal; font-weight: 500; color: var(--accent); }
+  .baby-form input, .baby-form select {
+    padding: 0.55rem 0.7rem; border-radius: 10px; border: 1px solid var(--border);
+    background: var(--bg); color: var(--ink); font-size: 0.9rem; font-family: var(--font-body);
+  }
+  .baby-form input:focus, .baby-form select:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .baby-row { display: grid; grid-template-columns: 1fr 1fr; gap: 0.9rem; }
+  .baby-actions { display: flex; align-items: center; gap: 0.8rem; margin-top: 0.2rem; }
+  .baby-actions .refs-status { margin: 0; }
+
   /* Corpus tab */
   #view-corpus .panel { margin-bottom: 1.1rem; }
   #view-corpus .panel:last-child { margin-bottom: 0; }
@@ -449,6 +465,7 @@
   <nav class="tabs" role="tablist" aria-label="Views">
     <button type="button" class="tab-btn active" data-view="today" role="tab" aria-selected="true">Today</button>
     <button type="button" class="tab-btn" data-view="history" role="tab" aria-selected="false">History</button>
+    <button type="button" class="tab-btn" data-view="baby" role="tab" aria-selected="false">Baby</button>
     <button type="button" class="tab-btn" data-view="corpus" role="tab" aria-selected="false">Corpus</button>
   </nav>
 
@@ -502,6 +519,45 @@
       <div id="history-list" class="history-list">
         <p class="log-empty">Loading…</p>
       </div>
+    </section>
+  </div>
+
+  <div id="view-baby" class="view" hidden>
+    <section class="panel">
+      <h2>Baby profile</h2>
+      <p class="refs-hint">These details ground the evidence-based answers under Insights — norms are weighed against your baby's actual age and size. Pre-filled with defaults; edit to match your baby.</p>
+      <form id="baby-form" class="baby-form">
+        <label class="baby-field">
+          <span>Name</span>
+          <input id="baby-name" type="text" maxlength="64" autocomplete="off" placeholder="Baby" />
+        </label>
+        <label class="baby-field">
+          <span>Sex</span>
+          <select id="baby-sex">
+            <option value="unspecified">Prefer not to say</option>
+            <option value="female">Female</option>
+            <option value="male">Male</option>
+          </select>
+        </label>
+        <label class="baby-field">
+          <span>Birthdate <em id="baby-age"></em></span>
+          <input id="baby-birthdate" type="date" />
+        </label>
+        <div class="baby-row">
+          <label class="baby-field">
+            <span>Weight (kg)</span>
+            <input id="baby-weight" type="number" min="0" max="50" step="0.1" inputmode="decimal" />
+          </label>
+          <label class="baby-field">
+            <span>Height (cm)</span>
+            <input id="baby-height" type="number" min="0" max="200" step="0.5" inputmode="decimal" />
+          </label>
+        </div>
+        <div class="baby-actions">
+          <button type="submit" class="btn-primary">Save</button>
+          <span class="refs-status" id="baby-status"></span>
+        </div>
+      </form>
     </section>
   </div>
 
@@ -1114,9 +1170,53 @@ async function renderHistory() {
   });
 }
 
+// --- Baby tab: profile that grounds the evidence-based answers -------------
+const babyForm = document.getElementById('baby-form');
+const babyName = document.getElementById('baby-name');
+const babySex = document.getElementById('baby-sex');
+const babyBirthdate = document.getElementById('baby-birthdate');
+const babyWeight = document.getElementById('baby-weight');
+const babyHeight = document.getElementById('baby-height');
+const babyAge = document.getElementById('baby-age');
+const babyStatus = document.getElementById('baby-status');
+
+function fillBaby(p) {
+  if (!p) return;
+  babyName.value = p.name || '';
+  babySex.value = p.sex || 'unspecified';
+  babyBirthdate.value = p.birthdate || '';
+  babyWeight.value = p.weight_kg != null ? p.weight_kg : '';
+  babyHeight.value = p.height_cm != null ? p.height_cm : '';
+  babyAge.textContent = p.age && p.age.label ? '· ' + p.age.label : '';
+}
+
+async function loadBaby() {
+  try {
+    const res = await fetch(API_BASE + '/api/profile', { headers: authHeaders() });
+    if (res.ok) fillBaby(await res.json());
+  } catch (err) { /* leave the pre-filled defaults in place on error */ }
+}
+
+babyForm.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const body = { name: babyName.value.trim(), sex: babySex.value };
+  if (babyBirthdate.value) body.birthdate = babyBirthdate.value;
+  if (babyWeight.value !== '') body.weight_kg = parseFloat(babyWeight.value);
+  if (babyHeight.value !== '') body.height_cm = parseFloat(babyHeight.value);
+  babyStatus.textContent = 'Saving…';
+  try {
+    const data = await postJSON('/api/profile', body);
+    fillBaby(data);
+    babyStatus.textContent = 'Saved.';
+  } catch (err) {
+    babyStatus.textContent = 'Error: ' + err.message;
+  }
+});
+
 const views = {
   today: document.getElementById('view-today'),
   history: document.getElementById('view-history'),
+  baby: document.getElementById('view-baby'),
   corpus: document.getElementById('view-corpus'),
 };
 
@@ -1130,9 +1230,11 @@ document.querySelectorAll('.tab-btn').forEach((btn) => {
     });
     views.today.hidden = view !== 'today';
     views.history.hidden = view !== 'history';
+    views.baby.hidden = view !== 'baby';
     views.corpus.hidden = view !== 'corpus';
     // Fetch fresh each time a tab opens so newly logged/uploaded data shows up.
     if (view === 'history') renderHistory();
+    if (view === 'baby') loadBaby();
     if (view === 'corpus') loadCorpus();
   });
 });

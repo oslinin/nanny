@@ -43,7 +43,7 @@ from google.adk.sessions import InMemorySessionService
 from google.genai import types
 from pydantic import BaseModel
 
-from . import corpus, sources, speech
+from . import corpus, profile, sources, speech
 from .activity import KNOWN_ACTIVITY_TYPES, KNOWN_UNITS
 from .stores import get_store
 from .workflow import DEFAULT_CLIENT_ID, build_app
@@ -132,6 +132,17 @@ class SourceDocumentUpdate(BaseModel):
 class SourcesUpdateRequest(BaseModel):
     google_search: bool | None = None
     document: SourceDocumentUpdate | None = None
+
+
+class BabyProfileUpdate(BaseModel):
+    # All optional: the Baby tab sends a partial update for whatever field
+    # changed. Validation (allowed sex, parseable date, sane ranges) happens
+    # in nanny/profile.py and surfaces as a 400 below.
+    name: str | None = None
+    sex: str | None = None
+    birthdate: str | None = None
+    weight_kg: float | None = None
+    height_cm: float | None = None
 
 
 class TurnResponse(BaseModel):
@@ -491,6 +502,31 @@ async def sources_post(
     else:
         raise HTTPException(400, "expected 'google_search' or 'document' in the body")
     return _sources_payload(client_id)
+
+
+@app.get("/api/profile")
+async def profile_get(client_id: str = Depends(_client_id)) -> dict:
+    """This client's baby profile (name, sex, birthdate, measurements) plus a
+    derived age. Always returns a value — a fresh client gets seeded defaults."""
+    now_iso = datetime.now(UTC).astimezone().isoformat()
+    return profile.snapshot(client_id, now_iso=now_iso)
+
+
+@app.post("/api/profile", dependencies=[Depends(_require_api_token)])
+async def profile_post(
+    body: BabyProfileUpdate, client_id: str = Depends(_client_id)
+) -> dict:
+    """Partial update of this client's baby profile; returns the same shape as
+    the GET (stored fields + derived age)."""
+    updates = body.model_dump(exclude_none=True)
+    if not updates:
+        raise HTTPException(400, "no profile fields to update")
+    try:
+        profile.set_profile(client_id, updates)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    now_iso = datetime.now(UTC).astimezone().isoformat()
+    return profile.snapshot(client_id, now_iso=now_iso)
 
 
 @app.get("/api/transcribe")

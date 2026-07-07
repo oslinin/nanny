@@ -253,6 +253,9 @@ Parent's question (an empty value means: proactively surface the one or two
 most useful observations or gentle questions from the data): {question}
 
 Rules:
+- The summary's 'baby' field gives the child's age and measurements. Weigh
+  norms and expectations against that specific age (a 2-month-old and a
+  10-month-old differ greatly), and factor in weight/height when relevant.
 - Tie every point to the specific numbers in the summary above; don't speak in
   generalities disconnected from what was logged.
 - Consult the 'child-guidance' skill for mainstream norms before relying on

@@ -47,6 +47,7 @@ from google.adk.workflow import START, Edge, Workflow, node
 from .activity import ActivityError, BabyActivity
 from .agents import build_classifier_agent, build_responder_agent
 from .llm import build_insights_context
+from .profile import snapshot as baby_snapshot
 from .research import build_insights_agent
 from .sources import get_prefs as get_source_prefs
 from .store import Store
@@ -138,6 +139,11 @@ def build_app(store_resolver: Callable[[str], Store]) -> App:
         now_iso = ctx.state.get("now_iso") or ""
         activities = [a.to_dict() for a in store.all()]
         context = build_insights_context(activities, now_iso=now_iso)
+        # The baby's age/measurements ride inside the same context the agent
+        # reasons over, so norms are weighed against this child's actual age
+        # rather than in the abstract (a 2-month-old and a 10-month-old differ
+        # greatly), and the offline fallback can lead with it too.
+        context["baby"] = baby_snapshot(client_id, now_iso=now_iso)
         ctx.state["insights_context"] = context
         ctx.state["insights_context_json"] = json.dumps(context)
         ctx.state.setdefault("question", "")
