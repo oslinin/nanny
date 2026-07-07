@@ -11,10 +11,10 @@ engine (``google.adk.workflow``) and real ADK agents (``google.adk.agents``).
                                     \\--(error)----------------------------> ErrorNode
 
 ``InsightsAgent`` (see ``nanny/research.py``) is a fourth real ``LlmAgent``: it
-reads a deterministic summary of the log (built by ``InsightsPrepNode``) and
-answers the parent's question — or proactively surfaces an observation —
-grounded in a curated ``child-guidance`` skill plus opt-in research tools
-(a scoped Google search and the parent's reference corpus).
+reads a deterministic summary of the log plus the baby's profile (both built by
+``InsightsPrepNode``) and answers the parent's question — or proactively
+surfaces an observation — grounded in opt-in research tools (ADK's built-in
+Google Search and the parent's reference corpus).
 
 ``HistoryNode`` is a pure read: deployed on Vertex AI Agent Runtime, the
 graph is only reachable through ``stream_query``/``async_stream_query`` (no
@@ -47,6 +47,7 @@ from google.adk.workflow import START, Edge, Workflow, node
 from .activity import ActivityError, BabyActivity
 from .agents import build_classifier_agent, build_responder_agent
 from .llm import build_insights_context
+from .profile import snapshot as baby_snapshot
 from .research import build_insights_agent
 from .sources import get_prefs as get_source_prefs
 from .store import Store
@@ -138,6 +139,11 @@ def build_app(store_resolver: Callable[[str], Store]) -> App:
         now_iso = ctx.state.get("now_iso") or ""
         activities = [a.to_dict() for a in store.all()]
         context = build_insights_context(activities, now_iso=now_iso)
+        # The baby's age/measurements ride inside the same context the agent
+        # reasons over, so norms are weighed against this child's actual age
+        # rather than in the abstract (a 2-month-old and a 10-month-old differ
+        # greatly), and the offline fallback can lead with it too.
+        context["baby"] = baby_snapshot(client_id, now_iso=now_iso)
         ctx.state["insights_context"] = context
         ctx.state["insights_context_json"] = json.dumps(context)
         ctx.state.setdefault("question", "")

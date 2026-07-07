@@ -232,9 +232,14 @@ def _summarize_insights(context: dict, question: str) -> str:
         " This is a plain summary of what you logged, not medical advice — for "
         "anything that concerns you, discuss the patterns with your pediatrician."
     )
+    # Lead with who this is about, so even the no-LLM fallback reflects the
+    # baby's age from the Baby tab rather than reading generically.
+    baby = context.get("baby") or {}
+    age_label = (baby.get("age") or {}).get("label")
+    lead = f"For {baby.get('name') or 'Baby'} ({age_label}): " if age_label else ""
     if question and question.strip():
         return (
-            "I can't reach the research tools right now, so here's what your own "
-            "log shows. " + base + disclaimer
+            lead + "I can't reach the research tools right now, so here's what "
+            "your own log shows. " + base + disclaimer
         )
-    return base + disclaimer
+    return lead + base + disclaimer
