@@ -12,13 +12,13 @@ Layered retrieval sources (the same opt-in philosophy as ``NANNY_API_TOKEN``):
    mainstream public-health guidance (see ``skills/child-guidance/``).
 2. Scoped web search via a Google Programmable Search Engine (opt-in,
    ``GOOGLE_CSE_ID`` + ``GOOGLE_CSE_API_KEY``) — pinned in the CSE console to
-   reputable sites (cdc.gov, aap.org, healthychildren.org, who.int,
-   unicef.org). The ADK built-in ``google_search`` is model-side grounding
-   that can't be reliably domain-restricted, which is why this uses a CSE.
-   Toggleable per parent from the Corpus tab.
+   authoritative sites (cdc.gov, aap.org, healthychildren.org, who.int). The
+   ADK built-in ``google_search`` is model-side grounding that can't be
+   reliably domain-restricted, which is why this uses a CSE. Toggleable per
+   parent from the Corpus tab.
 3. The parent's reference documents (opt-in, ``NANNY_RAG_ENABLED``) — the shared
-   UNICEF guide plus their own uploads, via Vertex RAG, each toggleable in the
-   Corpus tab.
+   UNICEF guide plus their own uploaded files, via Vertex RAG, each
+   toggleable in the Corpus tab.
 
 With none configured (local dev, tests, this sandbox), the agent still answers
 from the log summary + the curated skill; with no API key at all it falls back
@@ -61,7 +61,6 @@ _GUIDANCE_SITES = (
     "aap.org",
     "healthychildren.org",
     "who.int",
-    "unicef.org",
 )
 
 
@@ -150,8 +149,9 @@ def _insights_model_error_callback(*, callback_context, llm_request, error):
 def _search_reputable_child_health(query: str) -> dict:
     """Search reputable child-health sources for `query` and return citable hits.
 
-    Covers CDC, AAP/HealthyChildren, WHO, and UNICEF via a Google Programmable
-    Search Engine. Returns up to five ``{title, link, snippet}`` results the
+    Covers the authoritative sites CDC, AAP/HealthyChildren, and WHO via a
+    Google Programmable Search Engine (UNICEF's guide lives in the RAG corpus,
+    not here). Returns up to five ``{title, link, snippet}`` results the
     agent can cite. Only attached to the agent when ``GOOGLE_CSE_ID`` and
     ``GOOGLE_CSE_API_KEY`` are set.
     """
