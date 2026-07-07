@@ -227,6 +227,63 @@ def test_filter_disabled_tools_keeps_google_search_when_on_or_unset():
         assert "_search_reputable_child_health" in llm_request.tools_dict
 
 
+def test_scoped_query_bakes_in_hidden_site_operators():
+    from nanny.research import _GUIDANCE_SITES, _scoped_query
+
+    scoped = _scoped_query("how much should a newborn sleep")
+    assert scoped.startswith("how much should a newborn sleep (")
+    for site in _GUIDANCE_SITES:
+        assert f"site:{site}" in scoped
+
+
+def test_search_reputable_child_health_reports_unconfigured(monkeypatch):
+    from nanny.research import _search_reputable_child_health
+
+    monkeypatch.delenv("GOOGLE_CSE_ID", raising=False)
+    monkeypatch.delenv("GOOGLE_CSE_API_KEY", raising=False)
+    result = _search_reputable_child_health("sleep schedule")
+    assert result == {"results": [], "error": "scoped search is not configured"}
+
+
+def test_search_reputable_child_health_sends_the_scoped_query(monkeypatch):
+    import json
+    import urllib.parse
+    import urllib.request
+
+    from nanny.research import _scoped_query, _search_reputable_child_health
+
+    monkeypatch.setenv("GOOGLE_CSE_ID", "cse-id")
+    monkeypatch.setenv("GOOGLE_CSE_API_KEY", "cse-key")
+
+    captured_urls = []
+
+    class _FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def read(self):
+            return json.dumps(
+                {"items": [{"title": "T", "link": "https://cdc.gov/x", "snippet": "S"}]}
+            ).encode()
+
+    def fake_urlopen(url, timeout=10):
+        captured_urls.append(url)
+        return _FakeResponse()
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+
+    result = _search_reputable_child_health("newborn sleep")
+    assert result == {
+        "results": [{"title": "T", "link": "https://cdc.gov/x", "snippet": "S"}]
+    }
+    assert len(captured_urls) == 1
+    scoped_query = _scoped_query("newborn sleep")
+    assert urllib.parse.quote_plus(scoped_query) in captured_urls[0]
+
+
 def test_summarize_insights_empty_vs_populated():
     empty = _summarize_insights({"total_records": 0}, "")
     assert "nothing logged" in empty.lower()

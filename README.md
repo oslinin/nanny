@@ -215,7 +215,10 @@ All off by default; each lights up only when its env var is set.
 - **Evidence-based insights** — `InsightsAgent` answers questions grounded in the
   curated `child-guidance` skill (always on, offline + cited). Add `GOOGLE_CSE_ID`
   + `GOOGLE_CSE_API_KEY` (scoped search over cdc.gov, aap.org, who.int, …) for
-  richer grounding. Always framed as "patterns to discuss with your
+  richer grounding — any basic "search the entire web" Custom Search Engine
+  works, since the site restriction is baked into the query itself (hidden
+  `site:` operators), not configured in the CSE console. Always framed as
+  "patterns to discuss with your
   pediatrician," never a diagnosis. The parent controls which sources the agent
   may actually draw on for a given turn from the **Corpus** tab (`/api/sources`)
   — an unchecked source is hard-enforced, removed from the model's tools or

@@ -11,11 +11,13 @@ Layered retrieval sources (the same opt-in philosophy as ``NANNY_API_TOKEN``):
 1. ``child-guidance`` skill (always on, offline) — curated, cited summaries of
    mainstream public-health guidance (see ``skills/child-guidance/``).
 2. Scoped web search via a Google Programmable Search Engine (opt-in,
-   ``GOOGLE_CSE_ID`` + ``GOOGLE_CSE_API_KEY``) — pinned in the CSE console to
-   authoritative sites (cdc.gov, aap.org, healthychildren.org, who.int). The
-   ADK built-in ``google_search`` is model-side grounding that can't be
-   reliably domain-restricted, which is why this uses a CSE. Toggleable per
-   parent from the Corpus tab.
+   ``GOOGLE_CSE_ID`` + ``GOOGLE_CSE_API_KEY``) — any basic "search the entire
+   web" CSE works, since the domain restriction to authoritative sites
+   (cdc.gov, aap.org, healthychildren.org, who.int) is baked directly into
+   the query as hidden ``site:`` operators rather than relying on the CSE's
+   own console configuration. The ADK built-in ``google_search`` is
+   model-side grounding that can't be reliably domain-restricted, which is
+   why this uses a CSE. Toggleable per parent from the Corpus tab.
 3. The parent's reference documents (opt-in, ``NANNY_RAG_ENABLED``) — the shared
    UNICEF guide plus their own uploaded files, via Vertex RAG, each
    toggleable in the Corpus tab.
@@ -53,9 +55,11 @@ logger = logging.getLogger("nanny.research")
 _MODEL_NAME = os.environ.get("NANNY_GEMINI_MODEL", "gemini-flash-latest")
 _SKILLS_DIR = Path(__file__).resolve().parent.parent / "skills"
 
-# Reputable sites the scoped-search tool is meant to cover. The actual
-# restriction lives in the Programmable Search Engine's own configuration; this
-# list is documentation + a per-query hint.
+# Reputable sites the scoped-search tool restricts results to. Baked into
+# every query as hidden `site:` operators (see _search_reputable_child_health)
+# rather than relying on the Programmable Search Engine's own console
+# configuration, so any basic "search the entire web" CSE works — nothing to
+# misconfigure on Google's side.
 _GUIDANCE_SITES = (
     "cdc.gov",
     "aap.org",
@@ -146,13 +150,23 @@ def _insights_model_error_callback(*, callback_context, llm_request, error):
     return _insights_summary_response(callback_context.state)
 
 
+def _scoped_query(query: str) -> str:
+    """Appends hidden ``site:`` operators restricting `query` to
+    ``_GUIDANCE_SITES``, so the domain scoping lives in the query itself
+    rather than needing a CSE pinned to those sites in Google's console."""
+    site_filter = " OR ".join(f"site:{site}" for site in _GUIDANCE_SITES)
+    return f"{query} ({site_filter})"
+
+
 def _search_reputable_child_health(query: str) -> dict:
     """Search reputable child-health sources for `query` and return citable hits.
 
     Covers the authoritative sites CDC, AAP/HealthyChildren, and WHO via a
     Google Programmable Search Engine (UNICEF's guide lives in the RAG corpus,
-    not here). Returns up to five ``{title, link, snippet}`` results the
-    agent can cite. Only attached to the agent when ``GOOGLE_CSE_ID`` and
+    not here) — any basic CSE works, since the site restriction is baked into
+    the query (see ``_scoped_query``), not configured in the CSE console.
+    Returns up to five ``{title, link, snippet}`` results the agent can cite.
+    Only attached to the agent when ``GOOGLE_CSE_ID`` and
     ``GOOGLE_CSE_API_KEY`` are set.
     """
     api_key = os.environ.get("GOOGLE_CSE_API_KEY")
@@ -160,7 +174,7 @@ def _search_reputable_child_health(query: str) -> dict:
     if not (api_key and cse_id):
         return {"results": [], "error": "scoped search is not configured"}
     params = urllib.parse.urlencode(
-        {"key": api_key, "cx": cse_id, "q": query, "num": 5}
+        {"key": api_key, "cx": cse_id, "q": _scoped_query(query), "num": 5}
     )
     url = f"https://www.googleapis.com/customsearch/v1?{params}"
     try:
