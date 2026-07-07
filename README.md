@@ -158,98 +158,52 @@ uv run agents-cli lint  # ruff + codespell + ty
 
 ## Deploy
 
-The graph deploys to **Vertex AI Agent Runtime**; a thin **Cloud Run** dashboard
-(the same FastAPI app, pointed at the remote graph) proxies to it because Agent
-Runtime is IAM-gated and can't be called from a browser directly; an optional
-static frontend on **GitHub Pages** calls the dashboard. Run these from a machine
-with `gcloud` authenticated against your project.
+Everything is driven by `.env` and **one script**, `scripts/deploy.sh`, which
+runs three stages in order — each writing what it discovers (the agent resource
+name, the Cloud Run URL) back into `.env`, so stages compose and re-runs are
+idempotent:
 
-Put the values below in `.env` as you go (not `export`), then load them into
-your shell before running any `gcloud`/`uv` command:
-
-```sh
-set -a; source .env; set +a
-```
-
-### 1. Agent → Vertex AI Agent Runtime
-
-Add to `.env`:
-
-```
-GOOGLE_CLOUD_PROJECT=your-gcp-project-id
-GOOGLE_CLOUD_LOCATION=us-east1
-GOOGLE_CLOUD_STAGING_BUCKET=gs://your-staging-bucket
-```
+1. **Agent → Vertex AI Agent Runtime** (`uv run python -m nanny.agent_engine_app`).
+2. **Dashboard → Cloud Run** — the same FastAPI app pointed at the remote graph,
+   plus the IAM binding that lets it call the agent. A thin proxy is needed
+   because Agent Runtime is IAM-gated and can't be called from a browser
+   directly; it forwards to the agent and never calls Gemini itself.
+3. **Frontend → GitHub Pages** — points `docs/index.html` at the Cloud Run URL
+   and pushes.
 
 ```sh
-set -a; source .env; set +a
+cp .env.example .env    # fill in GOOGLE_CLOUD_PROJECT, GOOGLE_CLOUD_LOCATION,
+                        # GOOGLE_CLOUD_STAGING_BUCKET, NANNY_ALLOWED_ORIGINS
 
-gcloud config set project "$GOOGLE_CLOUD_PROJECT"
-gcloud services enable aiplatform.googleapis.com --project "$GOOGLE_CLOUD_PROJECT"
-
-uv sync --extra agent-engine
-uv run python -m nanny.agent_engine_app
+scripts/deploy.sh                       # DRY RUN — prints every command, changes
+                                        # nothing, needs no credentials
+scripts/deploy.sh --execute             # deploy for real (needs gcloud/ADC auth)
+scripts/deploy.sh dashboard --execute   # one stage: agent | dashboard | frontend
 ```
 
-Prints a resource name (`projects/.../reasoningEngines/123…`) — add it to
-`.env` as `NANNY_AGENT_ENGINE_RESOURCE_NAME` before step 2.
+Start with the dry run: it previews the exact `gcloud`/`uv` commands and the
+`.env` values each stage would set — the whole pipeline, before anything touches
+Google Cloud. Then run `--execute` from a machine with `gcloud`/ADC authenticated
+against your project. `--source .` builds the Cloud Run image from the
+`Dockerfile` via Cloud Build, so no local Docker is needed.
 
-### 2. Dashboard → Cloud Run
-
-The dashboard forwards to the agent and never calls Gemini itself, so it needs
-**no Gemini key** — just the resource name and permission to call it.
-
-Generate a token and add both it and your GitHub Pages origin to `.env` (the
-frontend in step 3 needs the same token):
-
-```sh
-echo "NANNY_API_TOKEN=$(openssl rand -hex 16)" >> .env
-echo "NANNY_ALLOWED_ORIGINS=https://YOUR-USERNAME.github.io" >> .env
-set -a; source .env; set +a
-```
+After the frontend stage, do the one-time GitHub setup it prints: repo
+**Settings → Pages** → Source "Deploy from a branch", branch `main`, folder
+`/docs`. Live at `https://YOUR-USERNAME.github.io/<repo>/`. Verify the backend:
 
 ```sh
-gcloud services enable run.googleapis.com --project "$GOOGLE_CLOUD_PROJECT"
-
-gcloud run deploy nanny --source . \
-  --project "$GOOGLE_CLOUD_PROJECT" --region "$GOOGLE_CLOUD_LOCATION" \
-  --allow-unauthenticated --min-instances=1 --max-instances=1 \
-  --set-env-vars="NANNY_API_TOKEN=${NANNY_API_TOKEN},NANNY_ALLOWED_ORIGINS=${NANNY_ALLOWED_ORIGINS},NANNY_AGENT_ENGINE_RESOURCE_NAME=${NANNY_AGENT_ENGINE_RESOURCE_NAME},GOOGLE_CLOUD_PROJECT=${GOOGLE_CLOUD_PROJECT},GOOGLE_CLOUD_LOCATION=${GOOGLE_CLOUD_LOCATION}"
-
-# Let the dashboard's service account call the deployed agent:
-RUN_SA=$(gcloud run services describe nanny --project "$GOOGLE_CLOUD_PROJECT" \
-  --region "$GOOGLE_CLOUD_LOCATION" --format='value(spec.template.spec.serviceAccountName)')
-gcloud projects add-iam-policy-binding "$GOOGLE_CLOUD_PROJECT" \
-  --member="serviceAccount:${RUN_SA}" --role="roles/aiplatform.user"
-```
-
-`--source .` builds the image from the `Dockerfile` via Cloud Build (no local
-Docker). Prints a `https://nanny-….run.app` Service URL — your backend.
-
-> Skipping Agent Runtime? Leave `NANNY_AGENT_ENGINE_RESOURCE_NAME` unset and the
-> dashboard runs the graph in-process — then give it a backend with
-> `--set-secrets=GEMINI_API_KEY=<secret>:latest` or
-> `--set-env-vars=...,GOOGLE_GENAI_USE_VERTEXAI=true`.
-
-Verify:
-
-```sh
-SERVICE_URL="https://nanny-xxxxx-ue.a.run.app"  # from the deploy output above
-
-curl -s -X POST "$SERVICE_URL/api/quick-tap" -H 'Content-Type: application/json' \
+set -a; source .env; set +a   # NANNY_SERVICE_URL + NANNY_API_TOKEN were written by the deploy
+curl -s -X POST "$NANNY_SERVICE_URL/api/quick-tap" -H 'Content-Type: application/json' \
   -H "X-Nanny-Token: $NANNY_API_TOKEN" -H "X-Nanny-Client-Id: smoke-test" \
   -d '{"activity_type":"bottle","quantity":4,"unit":"oz","notes":""}'
 ```
 
-### 3. Frontend → GitHub Pages
-
-1. In `docs/index.html`, set the Cloud Run Service URL and `NANNY_API_TOKEN`
-   (the same token from step 2).
-2. Commit and push.
-3. Repo **Settings → Pages** → Source "Deploy from a branch", branch `main`,
-   folder `/docs`.
-4. Live at `https://YOUR-USERNAME.github.io/nanny/`.
-
+> **Skipping Agent Runtime?** Leave `NANNY_AGENT_ENGINE_RESOURCE_NAME` unset and
+> run only `scripts/deploy.sh dashboard --execute`; the dashboard then runs the
+> graph in-process. Give it a Gemini backend by setting
+> `GOOGLE_GENAI_USE_VERTEXAI=true` (or `GEMINI_API_KEY`) in `.env` — the script
+> passes either through.
+>
 > Cloud Run's filesystem is ephemeral, so the activity log resets on container
 > recycle (migrating `nanny/store.py` to a database would fix it). ADK **session**
 > state is durable on deploy — Agent Runtime defaults to `VertexAiSessionService`.
