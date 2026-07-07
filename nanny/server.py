@@ -345,6 +345,19 @@ async def history(client_id: str = Depends(_client_id)) -> list[dict]:
     return final_state.get("history") or []
 
 
+@app.get("/api/schedule")
+async def schedule_get(client_id: str = Depends(_client_id)) -> dict:
+    """This client's sitter schedule — the reminders the frontend surfaces to
+    the human sitter in blue through the day (a fresh nudge every 20 minutes).
+
+    Read-only and unauthenticated like ``/api/sources``: a fresh client with no
+    schedule set yet gets the seeded default, so the feature is visible out of
+    the box. New schedules are set through the chat ("Instructions: …") path.
+    """
+    final_state = await _query(client_id, {"input_mode": "get_schedule"}, "schedule")
+    return final_state.get("schedule") or {"raw": "", "reminders": []}
+
+
 @app.post(
     "/api/insights",
     response_model=TurnResponse,

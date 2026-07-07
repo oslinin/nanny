@@ -229,3 +229,64 @@ def test_agent_runtime_backend_selected_when_resource_name_configured(
 def test_local_backend_selected_by_default(tmp_path, monkeypatch):
     server_module = _reload_server(tmp_path, monkeypatch)
     assert type(server_module.backend).__name__ == "_LocalRunnerBackend"
+
+
+def _reload_server_with_schedule(tmp_path, monkeypatch, **env):
+    """Like _reload_server but also reloads nanny.schedule so its per-client
+    data dir points at tmp_path (the SitterAgent path persists through it)."""
+    monkeypatch.setenv("NANNY_DATA_DIR", str(tmp_path))
+    for key, value in env.items():
+        monkeypatch.setenv(key, value)
+    import nanny.schedule as schedule_module
+    import nanny.stores as stores_module
+
+    importlib.reload(stores_module)
+    importlib.reload(schedule_module)
+    import nanny.server as server_module
+
+    importlib.reload(server_module)
+    return server_module
+
+
+def test_schedule_get_returns_seeded_default_for_fresh_client(tmp_path, monkeypatch):
+    server_module = _reload_server_with_schedule(tmp_path, monkeypatch)
+    client = TestClient(server_module.app)
+    resp = client.get("/api/schedule", headers={"X-Nanny-Client-Id": "fresh"})
+    assert resp.status_code == 200
+    # A brand-new client sees the seeded reminders out of the box.
+    assert len(resp.json()["reminders"]) == 6
+
+
+def test_chat_instructions_sets_schedule_then_get_reflects_it(tmp_path, monkeypatch):
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+    server_module = _reload_server_with_schedule(tmp_path, monkeypatch)
+    client = TestClient(server_module.app)
+    headers = {"X-Nanny-Client-Id": "alice"}
+
+    set_resp = client.post(
+        "/api/chat",
+        json={"text": "Instructions:; AM; 9: milk; 10:30: nap; PM; 1: milk"},
+        headers=headers,
+    )
+    assert set_resp.status_code == 200
+    assert set_resp.json()["ok"] is True
+
+    got = client.get("/api/schedule", headers=headers).json()
+    assert [r["time"] for r in got["reminders"]] == ["09:00", "10:30", "13:00"]
+
+
+def test_chat_nanny_prompt_returns_next_instruction(tmp_path, monkeypatch):
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+    server_module = _reload_server_with_schedule(tmp_path, monkeypatch)
+    client = TestClient(server_module.app)
+    headers = {"X-Nanny-Client-Id": "bob"}
+
+    resp = client.post("/api/chat", json={"text": "nanny"}, headers=headers)
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["ok"] is True
+    # The bare "nanny" prompt surfaces an instruction, never logs an activity.
+    assert body["activity"] is None
+    assert body["response_text"]

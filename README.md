@@ -6,10 +6,17 @@ shared datastore, orchestrated as a real multi-agent ADK graph.
 
 Built for the [5-Day AI Agents: Intensive Vibe Coding Course With Google](https://www.kaggle.com/competitions/5-day-ai-agents-intensive-vibecoding-course-with-google)
 capstone (**Concierge Agents** track). It demonstrates three course concepts:
-**multi-agent ADK systems** (`ClassifierAgent`, `ResponderAgent`, `InsightsAgent`
-are genuine `LlmAgent` nodes), **agent skills** (the `care-tips` skill), and
-**security** (chat input is screened for prompt-injection and secrets before it
-reaches the model — `nanny/security.py`).
+**multi-agent ADK systems** (`ClassifierAgent`, `ResponderAgent`, `InsightsAgent`,
+and `SitterAgent` are genuine `LlmAgent` nodes), **agent skills** (the `care-tips`
+skill), and **security** (chat input is screened for prompt-injection and secrets
+before it reaches the model — `nanny/security.py`).
+
+The **SitterAgent** is a proactive schedule concierge: a parent types a daily
+care schedule prefixed with `Instructions:` and the agent parses it into timed
+reminders; the dashboard then surfaces them to the human sitter in blue through
+the day (a fresh nudge of the current instruction every 20 minutes), and the
+bare prompt `nanny` asks for the next instruction on demand. See
+[Sitter schedule](#sitter-schedule).
 
 ## Orchestration graph
 
@@ -28,16 +35,24 @@ flowchart TD
     Save["SaveActivityNode<br>(deterministic storage, no LLM)"]
     Responder["ResponderAgent<br>(LlmAgent — summary + care-tips skill)"]
     History["HistoryNode<br>(deterministic: read-only history)"]
+    Schedule["ScheduleNode<br>(deterministic: read-only reminders)"]
     InsightsPrep["InsightsPrepNode<br>(deterministic: summarize log + load baby profile)"]
     Insights["InsightsAgent<br>(LlmAgent — evidence-grounded, cited)"]
+    SitterPrep["SitterPrepNode<br>(deterministic: load stored schedule)"]
+    Sitter["SitterAgent<br>(LlmAgent — parse schedule / next instruction)"]
+    SitterSave["SitterSaveNode<br>(deterministic: persist reminders, no LLM)"]
     ErrorNode["ErrorNode<br>(friendly rejection)"]
 
     START --> Ingest
     Ingest -- "bypass (quick-tap)" --> Router
     Ingest -- "to_classify (chat)" --> Classifier
+    Ingest -- "sitter (Instructions: / nanny)" --> SitterPrep
     Ingest -- "get_history" --> History
+    Ingest -- "get_schedule" --> Schedule
     Ingest -- "insights" --> InsightsPrep
     InsightsPrep --> Insights
+    SitterPrep --> Sitter
+    Sitter --> SitterSave
     Ingest -- "error" --> ErrorNode
     Classifier --> Postprocess
     Postprocess -- "extracted" --> Router
@@ -62,6 +77,7 @@ flowchart TD
     Classifier -. "model error → heuristic" .-> Classifier
     Responder -. "model error → template" .-> Responder
     Insights -. "model error → summary" .-> Insights
+    Sitter -. "model error → deterministic parse" .-> Sitter
 ```
 
 </details>
@@ -102,8 +118,9 @@ endpoints are inert unless their feature is enabled.
 | Method & path | Purpose |
 |---|---|
 | `POST /api/quick-tap` | Log a pre-formatted activity (bypasses the LLM) |
-| `POST /api/chat` | Log from free text (`{"text": "he pooped at 3 PM"}`) |
+| `POST /api/chat` | Log from free text (`{"text": "he pooped at 3 PM"}`); also the SitterAgent path (`Instructions: …` sets a schedule, `nanny` asks for the next instruction) |
 | `GET  /api/history` | This client's activity log |
+| `GET  /api/schedule` | This client's sitter reminders (seeded default until one is set) |
 | `POST /api/insights` | Evidence-grounded answer; empty question = proactive |
 | `GET/POST /api/profile` | Per-parent baby profile — age/weight/height (Baby tab) |
 | `GET/POST /api/sources` | Per-parent evidence-source toggles (Corpus tab) |
@@ -118,6 +135,31 @@ The dashboard's single Chat box calls both endpoints, not just `/api/chat`: a
 message that looks like a question (ends in `?`, or opens with a word like
 "is"/"does"/"can"/"how"/"what"/...) is sent to `/api/insights` instead — see
 `isInsightQuestion()` in `web/index.html`.
+
+## Sitter schedule
+
+A parent can hand the human sitter a whole day's plan in one message. Any chat
+message starting with `Instructions:` (optionally under a `Schedule` title
+line) is routed by `IngestNode` to the **SitterAgent** (`nanny/sitter.py`)
+instead of the activity classifier — it parses the free-form schedule into a
+list of timed reminders (`[{"time": "HH:MM", "text": …}]`), which the
+deterministic `SitterSaveNode` persists per-client (`nanny/schedule.py`, mirroring
+`nanny/sources.py`'s per-client JSON files). The bare prompt `nanny` routes to
+the same agent to read those reminders back and surface the next one.
+
+The dashboard surfaces the schedule to the sitter in **blue** reminder bubbles
+in the chat: on load it shows the instruction in effect right now, then a fresh
+nudge every 20 minutes through the day (`/api/schedule` + the `fireSitterReminder`
+loop in `web/index.html`). Both **`Instructions:`** and **`nanny`** are offered
+as suggested-prompt chips under the chat box.
+
+The agent ships **seeded** with a default schedule (`SEED_SCHEDULE_TEXT` in
+`nanny/schedule.py`), so a fresh client sees sitter reminders before ever
+setting their own. Like the other agents it degrades gracefully: with no model
+backend configured it parses the schedule with the deterministic
+`schedule.parse_schedule` heuristic, and the schedule text is screened for
+prompt-injection/secrets (`nanny/security.py`) before reaching the model, exactly
+like chat input.
 
 ## Tokens & environment variables
 
