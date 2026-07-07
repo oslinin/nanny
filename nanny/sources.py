@@ -24,6 +24,7 @@ from pathlib import Path
 from typing import Any
 
 import nanny.corpus as corpus_mod
+from nanny.llm import _model_available
 
 # Same per-visitor data directory as nanny/stores.py
 _DATA_DIR = Path(os.environ.get("NANNY_DATA_DIR", "./data")).resolve()
@@ -92,11 +93,10 @@ def set_upload_enabled(client_id: str, filename: str, enabled: bool) -> dict[str
 
 def availability(client_id: str) -> dict[str, bool]:
     """Which sources are actually configured server-side, independent of prefs."""
-    # google_search: both env vars must be set
-    google_search = bool(
-        os.environ.get("GOOGLE_CSE_ID", "").strip()
-        and os.environ.get("GOOGLE_CSE_API_KEY", "").strip()
-    )
+    # google_search: ADK's built-in tool piggybacks on the model backend
+    # InsightsAgent already needs — no separate credential of its own — so
+    # it's available exactly when a real model call can be made at all.
+    google_search = _model_available()
     # unicef: RAG enabled AND shared corpus actually seeded
     unicef = (
         corpus_mod.rag_enabled()

@@ -187,18 +187,26 @@ def test_build_insights_context_aggregates_by_type_and_day():
 
 
 def _llm_request_with_google_search_tool():
-    from nanny.research import _search_reputable_child_health
+    from nanny.research import _GOOGLE_SEARCH_TOOL_NAME
+
+    # A plain FunctionTool standing in for the real GoogleSearchAgentTool: the
+    # filter callback only cares about the tool's name, which is exactly what
+    # ADK gives the wrapped sub-agent tool (see _GOOGLE_SEARCH_TOOL_NAME).
+    def stand_in(query: str) -> dict:
+        return {"results": []}
+
+    stand_in.__name__ = _GOOGLE_SEARCH_TOOL_NAME
 
     llm_request = LlmRequest()
-    llm_request.append_tools([FunctionTool(_search_reputable_child_health)])
+    llm_request.append_tools([FunctionTool(stand_in)])
     return llm_request
 
 
 def test_filter_disabled_tools_removes_google_search_when_off():
-    from nanny.research import _filter_disabled_tools_callback
+    from nanny.research import _GOOGLE_SEARCH_TOOL_NAME, _filter_disabled_tools_callback
 
     llm_request = _llm_request_with_google_search_tool()
-    assert "_search_reputable_child_health" in llm_request.tools_dict
+    assert _GOOGLE_SEARCH_TOOL_NAME in llm_request.tools_dict
 
     callback_context = types.SimpleNamespace(
         state={"enabled_sources": {"google_search": False}}
@@ -206,17 +214,17 @@ def test_filter_disabled_tools_removes_google_search_when_off():
     result = _filter_disabled_tools_callback(callback_context, llm_request)
 
     assert result is None
-    assert "_search_reputable_child_health" not in llm_request.tools_dict
+    assert _GOOGLE_SEARCH_TOOL_NAME not in llm_request.tools_dict
     remaining = [
         d.name
         for tool in (llm_request.config.tools or [])
         for d in (tool.function_declarations or [])
     ]
-    assert "_search_reputable_child_health" not in remaining
+    assert _GOOGLE_SEARCH_TOOL_NAME not in remaining
 
 
 def test_filter_disabled_tools_keeps_google_search_when_on_or_unset():
-    from nanny.research import _filter_disabled_tools_callback
+    from nanny.research import _GOOGLE_SEARCH_TOOL_NAME, _filter_disabled_tools_callback
 
     for enabled_sources in ({"google_search": True}, {}):
         llm_request = _llm_request_with_google_search_tool()
@@ -224,64 +232,29 @@ def test_filter_disabled_tools_keeps_google_search_when_on_or_unset():
             state={"enabled_sources": enabled_sources}
         )
         _filter_disabled_tools_callback(callback_context, llm_request)
-        assert "_search_reputable_child_health" in llm_request.tools_dict
+        assert _GOOGLE_SEARCH_TOOL_NAME in llm_request.tools_dict
 
 
-def test_scoped_query_bakes_in_hidden_site_operators():
-    from nanny.research import _GUIDANCE_SITES, _scoped_query
+def test_optional_research_tools_attaches_google_search_when_model_available(
+    monkeypatch,
+):
+    from google.adk.tools.google_search_tool import GoogleSearchTool
 
-    scoped = _scoped_query("how much should a newborn sleep")
-    assert scoped.startswith("how much should a newborn sleep (")
-    for site in _GUIDANCE_SITES:
-        assert f"site:{site}" in scoped
+    from nanny.research import _optional_research_tools
 
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+    monkeypatch.delenv("GOOGLE_GENAI_USE_VERTEXAI", raising=False)
+    monkeypatch.delenv("NANNY_RAG_ENABLED", raising=False)
+    assert not any(isinstance(t, GoogleSearchTool) for t in _optional_research_tools())
 
-def test_search_reputable_child_health_reports_unconfigured(monkeypatch):
-    from nanny.research import _search_reputable_child_health
-
-    monkeypatch.delenv("GOOGLE_CSE_ID", raising=False)
-    monkeypatch.delenv("GOOGLE_CSE_API_KEY", raising=False)
-    result = _search_reputable_child_health("sleep schedule")
-    assert result == {"results": [], "error": "scoped search is not configured"}
-
-
-def test_search_reputable_child_health_sends_the_scoped_query(monkeypatch):
-    import json
-    import urllib.parse
-    import urllib.request
-
-    from nanny.research import _scoped_query, _search_reputable_child_health
-
-    monkeypatch.setenv("GOOGLE_CSE_ID", "cse-id")
-    monkeypatch.setenv("GOOGLE_CSE_API_KEY", "cse-key")
-
-    captured_urls = []
-
-    class _FakeResponse:
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *exc):
-            return False
-
-        def read(self):
-            return json.dumps(
-                {"items": [{"title": "T", "link": "https://cdc.gov/x", "snippet": "S"}]}
-            ).encode()
-
-    def fake_urlopen(url, timeout=10):
-        captured_urls.append(url)
-        return _FakeResponse()
-
-    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
-
-    result = _search_reputable_child_health("newborn sleep")
-    assert result == {
-        "results": [{"title": "T", "link": "https://cdc.gov/x", "snippet": "S"}]
-    }
-    assert len(captured_urls) == 1
-    scoped_query = _scoped_query("newborn sleep")
-    assert urllib.parse.quote_plus(scoped_query) in captured_urls[0]
+    monkeypatch.setenv("GEMINI_API_KEY", "fake-key")
+    tools = _optional_research_tools()
+    search_tools = [t for t in tools if isinstance(t, GoogleSearchTool)]
+    assert len(search_tools) == 1
+    # Must bypass the multi-tools limit: InsightsAgent always has other tools
+    # (at least the child-guidance SkillToolset) alongside this one.
+    assert search_tools[0].bypass_multi_tools_limit is True
 
 
 def test_summarize_insights_empty_vs_populated():

@@ -10,14 +10,12 @@ Layered retrieval sources (the same opt-in philosophy as ``NANNY_API_TOKEN``):
 
 1. ``child-guidance`` skill (always on, offline) — curated, cited summaries of
    mainstream public-health guidance (see ``skills/child-guidance/``).
-2. Scoped web search via a Google Programmable Search Engine (opt-in,
-   ``GOOGLE_CSE_ID`` + ``GOOGLE_CSE_API_KEY``) — any basic "search the entire
-   web" CSE works, since the domain restriction to authoritative sites
-   (cdc.gov, aap.org, healthychildren.org, who.int) is baked directly into
-   the query as hidden ``site:`` operators rather than relying on the CSE's
-   own console configuration. The ADK built-in ``google_search`` is
-   model-side grounding that can't be reliably domain-restricted, which is
-   why this uses a CSE. Toggleable per parent from the Corpus tab.
+2. ADK's built-in ``google_search`` grounding tool — general web search,
+   piggybacking on whatever Gemini/Vertex access the agent already has, so no
+   separate API key or search-engine setup to configure or misconfigure.
+   Trade-off: it's model-side grounding, so results can't be restricted to a
+   fixed list of domains the way a scoped Custom Search Engine could be.
+   Toggleable per parent from the Corpus tab.
 3. The parent's reference documents (opt-in, ``NANNY_RAG_ENABLED``) — the shared
    UNICEF guide plus their own uploaded files, via Vertex RAG, each
    toggleable in the Corpus tab.
@@ -32,16 +30,14 @@ credentials and no extra packages installed.
 
 from __future__ import annotations
 
-import json
 import logging
 import os
-import urllib.parse
-import urllib.request
 from pathlib import Path
 
 from google.adk.agents.llm_agent import LlmAgent
 from google.adk.models.llm_response import LlmResponse
 from google.adk.skills import load_skill_from_dir
+from google.adk.tools.google_search_tool import GoogleSearchTool
 from google.adk.tools.retrieval.base_retrieval_tool import BaseRetrievalTool
 from google.adk.tools.skill_toolset import SkillToolset
 from google.genai import types
@@ -55,18 +51,6 @@ logger = logging.getLogger("nanny.research")
 _MODEL_NAME = os.environ.get("NANNY_GEMINI_MODEL", "gemini-flash-latest")
 _SKILLS_DIR = Path(__file__).resolve().parent.parent / "skills"
 
-# Reputable sites the scoped-search tool restricts results to. Baked into
-# every query as hidden `site:` operators (see _search_reputable_child_health)
-# rather than relying on the Programmable Search Engine's own console
-# configuration, so any basic "search the entire web" CSE works — nothing to
-# misconfigure on Google's side.
-_GUIDANCE_SITES = (
-    "cdc.gov",
-    "aap.org",
-    "healthychildren.org",
-    "who.int",
-)
-
 
 def _text_response(text: str) -> LlmResponse:
     return LlmResponse(
@@ -74,9 +58,12 @@ def _text_response(text: str) -> LlmResponse:
     )
 
 
-# The plain-function tool's name, as ADK's FunctionTool derives it
-# (func.__name__) — used to remove it from a turn's tool list below.
-_GOOGLE_SEARCH_TOOL_NAME = "_search_reputable_child_health"
+# InsightsAgent always has multiple tools (at minimum the child-guidance
+# SkillToolset), so ADK's built-in google_search tool always gets wrapped
+# into a sub-agent named this (see _optional_research_tools) — that wrapping
+# is what lets it combine with other tools at all, and gives it a normal
+# name/declaration we can filter out below like any other tool.
+_GOOGLE_SEARCH_TOOL_NAME = "google_search_agent"
 
 
 def _filter_disabled_tools_callback(callback_context, llm_request):
@@ -150,62 +137,22 @@ def _insights_model_error_callback(*, callback_context, llm_request, error):
     return _insights_summary_response(callback_context.state)
 
 
-def _scoped_query(query: str) -> str:
-    """Appends hidden ``site:`` operators restricting `query` to
-    ``_GUIDANCE_SITES``, so the domain scoping lives in the query itself
-    rather than needing a CSE pinned to those sites in Google's console."""
-    site_filter = " OR ".join(f"site:{site}" for site in _GUIDANCE_SITES)
-    return f"{query} ({site_filter})"
-
-
-def _search_reputable_child_health(query: str) -> dict:
-    """Search reputable child-health sources for `query` and return citable hits.
-
-    Covers the authoritative sites CDC, AAP/HealthyChildren, and WHO via a
-    Google Programmable Search Engine (UNICEF's guide lives in the RAG corpus,
-    not here) — any basic CSE works, since the site restriction is baked into
-    the query (see ``_scoped_query``), not configured in the CSE console.
-    Returns up to five ``{title, link, snippet}`` results the agent can cite.
-    Only attached to the agent when ``GOOGLE_CSE_ID`` and
-    ``GOOGLE_CSE_API_KEY`` are set.
-    """
-    api_key = os.environ.get("GOOGLE_CSE_API_KEY")
-    cse_id = os.environ.get("GOOGLE_CSE_ID")
-    if not (api_key and cse_id):
-        return {"results": [], "error": "scoped search is not configured"}
-    params = urllib.parse.urlencode(
-        {"key": api_key, "cx": cse_id, "q": _scoped_query(query), "num": 5}
-    )
-    url = f"https://www.googleapis.com/customsearch/v1?{params}"
-    try:
-        with urllib.request.urlopen(url, timeout=10) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-    except Exception as exc:  # pragma: no cover - network path, not run offline
-        logger.warning("scoped search failed: %s", exc)
-        return {"results": [], "error": str(exc)}
-    results = [
-        {
-            "title": item.get("title", ""),
-            "link": item.get("link", ""),
-            "snippet": item.get("snippet", ""),
-        }
-        for item in data.get("items", [])
-    ]
-    return {"results": results}
-
-
 def _optional_research_tools() -> list:
     """Builds the opt-in research tools that are actually configured.
 
-    Each is added only when its env vars are present and its dependencies
-    import, so a missing integration silently degrades to "not available to the
-    agent" rather than breaking construction — the whole module has to import
-    and run with nothing configured (local dev, tests, this sandbox).
+    Each is added only when its dependencies are actually usable, so a
+    missing integration silently degrades to "not available to the agent"
+    rather than breaking construction — the whole module has to import and
+    run with nothing configured (local dev, tests, this sandbox).
     """
     tools: list = []
 
-    if os.environ.get("GOOGLE_CSE_ID") and os.environ.get("GOOGLE_CSE_API_KEY"):
-        tools.append(_search_reputable_child_health)
+    if _model_available():
+        # bypass_multi_tools_limit=True: InsightsAgent always has other tools
+        # (at least the child-guidance SkillToolset), and google_search can't
+        # be combined with other tools unless wrapped into its own sub-agent
+        # — this flag makes ADK do that wrapping (see _GOOGLE_SEARCH_TOOL_NAME).
+        tools.append(GoogleSearchTool(bypass_multi_tools_limit=True))
 
     if corpus.rag_enabled():
         tools.append(_PerClientRagRetrieval())

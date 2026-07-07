@@ -113,7 +113,7 @@ Nothing is required to run locally. Configure only what you need:
 | `NANNY_API_TOKEN` | Require `X-Nanny-Token` on all data endpoints (shared gate for a public deploy). |
 | `NANNY_ALLOWED_ORIGINS` | Comma-separated origins allowed cross-origin (e.g. your GitHub Pages URL). |
 | `NANNY_PORT` | Change the local bind port (default `8000`). |
-| `NANNY_RAG_ENABLED`, `NANNY_STT_ENABLED`, `GOOGLE_CSE_*` | Opt-in InsightsAgent tools and speech fallback (see [Optional features](#optional-features)). |
+| `NANNY_RAG_ENABLED`, `NANNY_STT_ENABLED` | Opt-in InsightsAgent RAG tool and speech fallback (see [Optional features](#optional-features)). |
 
 Copy [`.env.example`](.env.example) to `.env` and fill in what applies.
 
@@ -213,17 +213,15 @@ curl -s -X POST "$NANNY_SERVICE_URL/api/quick-tap" -H 'Content-Type: application
 All off by default; each lights up only when its env var is set.
 
 - **Evidence-based insights** — `InsightsAgent` answers questions grounded in the
-  curated `child-guidance` skill (always on, offline + cited). Add `GOOGLE_CSE_ID`
-  + `GOOGLE_CSE_API_KEY` (scoped search over cdc.gov, aap.org, who.int, …) for
-  richer grounding — any basic "search the entire web" Custom Search Engine
-  works, since the site restriction is baked into the query itself (hidden
-  `site:` operators), not configured in the CSE console. Always framed as
-  "patterns to discuss with your
-  pediatrician," never a diagnosis. The parent controls which sources the agent
-  may actually draw on for a given turn from the **Corpus** tab (`/api/sources`)
-  — an unchecked source is hard-enforced, removed from the model's tools or
-  filtered out of retrieval results before they ever reach the LLM, not just
-  told not to use it.
+  curated `child-guidance` skill (always on, offline + cited), plus ADK's
+  built-in Google Search grounding tool for richer web-sourced context —
+  lights up automatically once a real Gemini/Vertex backend is configured
+  (no separate API key of its own). Always framed as "patterns to discuss
+  with your pediatrician," never a diagnosis. The parent controls which
+  sources the agent may actually draw on for a given turn from the
+  **Corpus** tab (`/api/sources`) — an unchecked source is hard-enforced,
+  removed from the model's tools or filtered out of retrieval results before
+  they ever reach the LLM, not just told not to use it.
 - **Bring your own references (RAG)** — set `NANNY_RAG_ENABLED=true` (on both the
   Agent Runtime and Cloud Run deploys) to give each parent a private Vertex AI
   RAG corpus behind the `/api/corpus` endpoints, alongside one shared corpus

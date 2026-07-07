@@ -70,6 +70,12 @@ def fake_rag(monkeypatch):
 
 def _reload_server(tmp_path, monkeypatch, **env):
     monkeypatch.setenv("NANNY_DATA_DIR", str(tmp_path))
+    # google_search's availability now piggybacks on the model backend
+    # (_model_available()) rather than its own env vars — clear these so
+    # ambient sandbox state can't leak into a test that didn't ask for it.
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+    monkeypatch.delenv("GOOGLE_GENAI_USE_VERTEXAI", raising=False)
     for key, value in env.items():
         monkeypatch.setenv(key, value)
 
@@ -85,8 +91,6 @@ def _reload_server(tmp_path, monkeypatch, **env):
 
 
 def test_sources_report_nothing_available_by_default(tmp_path, monkeypatch):
-    monkeypatch.delenv("GOOGLE_CSE_ID", raising=False)
-    monkeypatch.delenv("GOOGLE_CSE_API_KEY", raising=False)
     monkeypatch.delenv("NANNY_RAG_ENABLED", raising=False)
     server = _reload_server(tmp_path, monkeypatch)
     client = TestClient(server.app)
@@ -104,8 +108,7 @@ def test_google_search_toggle_persists_and_requires_token_when_configured(
     server = _reload_server(
         tmp_path,
         monkeypatch,
-        GOOGLE_CSE_ID="cse-id",
-        GOOGLE_CSE_API_KEY="cse-key",
+        GEMINI_API_KEY="fake-key",
         NANNY_API_TOKEN="secret123",
     )
     client = TestClient(server.app)

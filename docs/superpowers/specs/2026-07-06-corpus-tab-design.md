@@ -4,11 +4,13 @@
 
 Give parents control over which evidence sources `InsightsAgent` draws on
 when answering a question. Today the retrieval sources are all-or-nothing,
-set once at deploy time via env vars (`GOOGLE_CSE_ID`/`GOOGLE_CSE_API_KEY`,
-`NANNY_RAG_ENABLED`). Add a **Corpus** tab, alongside Today/History, where a
-parent can:
+set once at deploy time via env vars (a real model backend, `NANNY_RAG_
+ENABLED`). Add a **Corpus** tab, alongside Today/History, where a parent can:
 
-- Turn Google Search (the scoped CSE tool) on or off.
+- Turn Google Search on or off. (Originally a scoped Custom Search Engine
+  gated on `GOOGLE_CSE_ID`/`GOOGLE_CSE_API_KEY`; later swapped for ADK's
+  built-in `google_search` grounding tool — no separate credential, but no
+  domain restriction either. See `nanny/research.py`.)
 - See a NotebookLM-style list of reference documents — a shared UNICEF
   guide pre-loaded first, then anything they've personally uploaded — and
   check/uncheck which ones the agent may draw on.
@@ -93,7 +95,8 @@ their own `gcloud`/ADC credentials — same trust boundary as any other
 
 `nanny/sources.py`'s `availability(client_id)`:
 
-- `google_search`: `GOOGLE_CSE_ID` and `GOOGLE_CSE_API_KEY` both set.
+- `google_search`: `_model_available()` — a real Gemini/Vertex backend is
+  configured (no separate credential of its own; it piggybacks on that).
 - `unicef`: `corpus.rag_enabled()` **and** the shared corpus has actually
   been seeded (`resolve_shared_unicef_corpus()` returns something) — so the
   row stays hidden until the operator runs the seed script, rather than
@@ -107,12 +110,13 @@ their own `gcloud`/ADC credentials — same trust boundary as any other
 
 `research.py` changes:
 
-- **Google Search**: unchanged mechanism from today (`_search_reputable_
-  child_health`, a plain function tool), but now wrapped so it is *removed
-  entirely from the model's tool list* for a turn where `google_search` is
-  false in state — a `before_model_callback`-level filter, not a prompt
-  instruction. When absent from the tools the model is given, it cannot be
-  called, full stop.
+- **Google Search**: ADK's built-in `google_search` tool (wrapped into a
+  named sub-agent tool, `google_search_agent`, since InsightsAgent always has
+  other tools alongside it — see `bypass_multi_tools_limit` in
+  `nanny/research.py`) is *removed entirely from the model's tool list* for
+  a turn where `google_search` is false in state — a `before_model_callback`
+  -level filter, not a prompt instruction. When absent from the tools the
+  model is given, it cannot be called, full stop.
 - **References** (UNICEF + personal uploads): `_PerClientRagRetrieval` is
   extended into one merged `search_my_references` tool:
   1. If `unicef` is enabled for this client, queries the shared UNICEF
@@ -169,9 +173,9 @@ New tab button: `Corpus`, alongside Today/History. New `#view-corpus`
 section, replacing today's inline `refs-panel` (which is deleted from the
 Today view):
 
-- A **Google Search** row: label, short description ("Live search of
-  reputable sites — CDC, AAP, WHO, healthychildren.org"), and a checkbox.
-  Omitted if not available.
+- A **Google Search** row: label, short description ("Live web search,
+  grounded by Gemini — general results, not restricted to specific sites"),
+  and a checkbox. Omitted if not available.
 - A **References** list, NotebookLM-style — one row per document:
   - "The Art of Parenting" with a small "UNICEF" badge, checkbox, and a
     delete button like any other row — it's a default entry a client can

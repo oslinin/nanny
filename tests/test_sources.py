@@ -64,16 +64,15 @@ def test_corrupt_file_falls_back_to_defaults(tmp_path, monkeypatch):
     }
 
 
-def test_availability_google_search_needs_both_env_vars(monkeypatch, tmp_path):
-    monkeypatch.delenv("GOOGLE_CSE_ID", raising=False)
-    monkeypatch.delenv("GOOGLE_CSE_API_KEY", raising=False)
+def test_availability_google_search_needs_a_real_model_backend(monkeypatch, tmp_path):
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+    monkeypatch.delenv("GOOGLE_GENAI_USE_VERTEXAI", raising=False)
     monkeypatch.delenv("NANNY_RAG_ENABLED", raising=False)
     mod = _reload(tmp_path, monkeypatch)
     assert mod.availability("alice")["google_search"] is False
 
-    mod = _reload(
-        tmp_path, monkeypatch, GOOGLE_CSE_ID="cse-id", GOOGLE_CSE_API_KEY="cse-key"
-    )
+    mod = _reload(tmp_path, monkeypatch, GEMINI_API_KEY="fake-key")
     assert mod.availability("alice")["google_search"] is True
 
 
