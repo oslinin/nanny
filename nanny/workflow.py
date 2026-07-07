@@ -5,10 +5,21 @@ engine (``google.adk.workflow``) and real ADK agents (``google.adk.agents``).
                 \\--(to_classify)--> ClassifierAgent (LLM) --> ClassifierPostProcessNode --(extracted)--> RouterNode
                 \\--(error)-------------------------------------------------------------------------------------> ErrorNode
                 \\--(get_history)-------------------------> HistoryNode
+                \\--(get_schedule)------------------------> ScheduleNode
                 \\--(insights)---> InsightsPrepNode -----> InsightsAgent (LLM)
+                \\--(sitter)-----> SitterPrepNode -------> SitterAgent (LLM) --> SitterSaveNode --(error)--> ErrorNode
                                                                               \\--(error)------------------------> ErrorNode
     RouterNode -> SaveActivityNode --(saved)--> ResponderAgent (LLM)
                                     \\--(error)----------------------------> ErrorNode
+
+``SitterAgent`` (see ``nanny/sitter.py``) is a fifth real ``LlmAgent``: a
+chat message starting with "Instructions:" carries a daily care schedule the
+parent wants for their baby, which it parses into timed reminders that
+``SitterSaveNode`` persists (via ``nanny/schedule.py``); the bare prompt
+"nanny" instead asks it to read those back and surface the next instruction.
+The frontend shows those reminders to the human sitter in blue through the day
+(a fresh nudge every 20 minutes). ``ScheduleNode`` is the read-only path the
+frontend polls for them.
 
 ``InsightsAgent`` (see ``nanny/research.py``) is a fourth real ``LlmAgent``: it
 reads a deterministic summary of the log plus the baby's profile (both built by
@@ -44,13 +55,21 @@ from google.adk.agents.context import Context
 from google.adk.apps import App
 from google.adk.workflow import START, Edge, Workflow, node
 
+from . import schedule as schedule_mod
 from .activity import ActivityError, BabyActivity
 from .agents import build_classifier_agent, build_responder_agent
 from .llm import build_insights_context
 from .profile import snapshot as baby_snapshot
 from .research import build_insights_agent
+from .sitter import build_sitter_agent
 from .sources import get_prefs as get_source_prefs
 from .store import Store
+
+# A chat message that opens with this (case-insensitive) is a schedule for the
+# SitterAgent, not an activity to log; the bare word "nanny" asks the same
+# agent for the next instruction. See ingest_node.
+SITTER_INSTRUCTIONS_PREFIX = "instructions:"
+SITTER_NEXT_KEYWORD = "nanny"
 
 logger = logging.getLogger("nanny.workflow")
 
@@ -99,12 +118,33 @@ def build_app(store_resolver: Callable[[str], Store]) -> App:
                 ctx.state["last_status"] = "error"
                 ctx.route = "error"
         elif mode == "chat":
-            # Optimistic default — ClassifierAgent's offline-fallback or
-            # security callbacks overwrite this to False if either fires.
-            ctx.state["used_llm_extraction"] = True
-            ctx.route = "to_classify"
+            text = (ctx.state.get("chat_text") or "").strip()
+            lowered = text.lower()
+            # Tolerate an optional "Schedule" title line before "Instructions:"
+            # (the format the schedule is seeded in), so a parent can paste
+            # either "Instructions: …" or "Schedule\n\nInstructions: …".
+            probe = lowered
+            if probe.startswith("schedule"):
+                probe = probe[len("schedule") :].lstrip(" \t\r\n:")
+            if probe.startswith(SITTER_INSTRUCTIONS_PREFIX):
+                # A daily care schedule for the SitterAgent to parse and store.
+                ctx.state["sitter_action"] = "set_schedule"
+                ctx.state["schedule_text"] = text
+                ctx.route = "sitter"
+            elif lowered == SITTER_NEXT_KEYWORD:
+                # Ask the SitterAgent for the next instruction to do.
+                ctx.state["sitter_action"] = "next"
+                ctx.state["schedule_text"] = ""
+                ctx.route = "sitter"
+            else:
+                # Optimistic default — ClassifierAgent's offline-fallback or
+                # security callbacks overwrite this to False if either fires.
+                ctx.state["used_llm_extraction"] = True
+                ctx.route = "to_classify"
         elif mode == "get_history":
             ctx.route = "get_history"
+        elif mode == "get_schedule":
+            ctx.route = "get_schedule"
         elif mode == "insights":
             ctx.route = "insights"
         else:
@@ -123,6 +163,82 @@ def build_app(store_resolver: Callable[[str], Store]) -> App:
         client_id = ctx.state.get("client_id") or DEFAULT_CLIENT_ID
         store = store_resolver(client_id)
         ctx.state["history"] = [a.to_dict() for a in store.all()]
+        ctx.state["last_status"] = "ok"
+
+    @node
+    async def schedule_node(ctx: Context) -> None:
+        """Read-only: returns the resolved client's stored sitter schedule.
+
+        The frontend polls this to surface the sitter's reminders in blue
+        through the day. Same agent-side-Store rationale as ``history_node``:
+        keeps schedule reads on the agent side of the Agent Runtime split.
+        """
+        client_id = ctx.state.get("client_id") or DEFAULT_CLIENT_ID
+        ctx.state["schedule"] = schedule_mod.get_schedule(client_id)
+        ctx.state["last_status"] = "ok"
+
+    @node
+    async def sitter_prep_node(ctx: Context) -> None:
+        """Loads the stored reminders into state before SitterAgent runs.
+
+        For a "next" turn the agent needs the already-stored schedule to read
+        the next instruction from; for a "set_schedule" turn there is nothing
+        to load yet (the agent is about to produce it). Also seeds the
+        optimistic ``used_llm_response`` flag the agent's callbacks flip off.
+        """
+        client_id = ctx.state.get("client_id") or DEFAULT_CLIENT_ID
+        action = ctx.state.get("sitter_action") or "next"
+        stored = schedule_mod.get_schedule(client_id)
+        ctx.state["sitter_reminders"] = stored["reminders"]
+        ctx.state["sitter_reminders_json"] = json.dumps(stored["reminders"])
+        ctx.state.setdefault("schedule_text", "")
+        ctx.state["sitter_action"] = action
+        ctx.state["used_llm_response"] = True
+        ctx.state["last_status"] = "ok"
+
+    @node
+    async def sitter_save_node(ctx: Context) -> None:
+        """Deterministic completion of a SitterAgent turn — no LLM here.
+
+        On ``set_schedule`` it persists the parsed reminders (falling back to
+        the deterministic parser if the model returned nothing usable), the one
+        node allowed to write the schedule. On ``next`` it just surfaces the
+        agent's message. A security block on the schedule text ends here with a
+        friendly rejection (terminal node — no downstream generation).
+        """
+        if ctx.state.get("security_blocked"):
+            err = ctx.state.get("error", "unknown error")
+            ctx.state["response_text"] = f"Sorry, I couldn't save that schedule: {err}"
+            ctx.state["used_llm_response"] = False
+            ctx.state["last_status"] = "error"
+            return
+        client_id = ctx.state.get("client_id") or DEFAULT_CLIENT_ID
+        action = ctx.state.get("sitter_action") or "next"
+        response = ctx.state.get("sitter_response") or {}
+        message = (response.get("message") or "").strip()
+
+        if action == "set_schedule":
+            raw = ctx.state.get("schedule_text") or ""
+            reminders = schedule_mod.normalize_reminders(response.get("reminders"))
+            if not reminders:
+                # A live model that returned nothing usable — never lose the
+                # schedule; fall back to the deterministic parser.
+                reminders = schedule_mod.parse_schedule(raw)
+            schedule_mod.save_schedule(client_id, raw, reminders)
+            ctx.state["schedule"] = {"raw": raw, "reminders": reminders}
+            if not message:
+                message = (
+                    f"Got it — I'll remind the sitter of {len(reminders)} thing(s) "
+                    "through the day."
+                )
+        elif not message:
+            # A live model that returned no text — recompute deterministically.
+            reminders = ctx.state.get("sitter_reminders") or []
+            now_hhmm = schedule_mod.hhmm_from_iso(ctx.state.get("now_iso") or "")
+            upcoming = schedule_mod.next_reminder(reminders, now_hhmm)
+            message = schedule_mod.format_reminder(upcoming)
+
+        ctx.state["response_text"] = message
         ctx.state["last_status"] = "ok"
 
     @node
@@ -152,6 +268,7 @@ def build_app(store_resolver: Callable[[str], Store]) -> App:
 
     classifier_agent = build_classifier_agent()
     insights_agent = build_insights_agent()
+    sitter_agent = build_sitter_agent()
 
     @node
     async def classifier_postprocess_node(ctx: Context) -> None:
@@ -246,10 +363,18 @@ def build_app(store_resolver: Callable[[str], Store]) -> App:
             Edge(from_node=ingest_node, to_node=history_node, route="get_history"),
             Edge(
                 from_node=ingest_node,
+                to_node=schedule_node,
+                route="get_schedule",
+            ),
+            Edge(
+                from_node=ingest_node,
                 to_node=insights_prep_node,
                 route="insights",
             ),
             (insights_prep_node, insights_agent),
+            Edge(from_node=ingest_node, to_node=sitter_prep_node, route="sitter"),
+            (sitter_prep_node, sitter_agent),
+            (sitter_agent, sitter_save_node),
             Edge(from_node=ingest_node, to_node=error_node, route="error"),
             (classifier_agent, classifier_postprocess_node),
             Edge(

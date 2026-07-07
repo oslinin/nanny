@@ -18,6 +18,8 @@
     --border: #e7e9f2;
     --bubble: #eef0f7;
     --danger: #d1495b;
+    --sitter: #2f6fed;
+    --sitter-soft: #e7effd;
     --shadow: 0 1px 2px rgba(30, 34, 51, 0.04), 0 12px 28px -16px rgba(30, 34, 51, 0.22);
     --radius: 16px;
     --font-display: ui-rounded, "SF Pro Rounded", "Nunito", "Segoe UI", system-ui, sans-serif;
@@ -36,6 +38,8 @@
       --border: #2b2f3d;
       --bubble: #232735;
       --danger: #f2879a;
+      --sitter: #86a9ff;
+      --sitter-soft: #202a44;
       --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 14px 34px -16px rgba(0, 0, 0, 0.66);
     }
   }
@@ -247,6 +251,16 @@
     border-bottom-left-radius: 5px;
   }
   .msg.agent.error { background: transparent; border: 1px solid var(--danger); color: var(--danger); }
+  /* Sitter reminders: the proactive prompts for the human nanny, in blue. */
+  .msg.sitter {
+    align-self: flex-start;
+    background: var(--sitter-soft);
+    color: var(--sitter);
+    border: 1px solid var(--sitter);
+    border-bottom-left-radius: 5px;
+    font-weight: 550;
+  }
+  .msg.sitter .tag { color: var(--sitter); opacity: 0.85; }
   .msg .tag {
     display: block;
     font-size: 0.66rem;
@@ -306,7 +320,7 @@
   .mic-hint { font-size: 0.76rem; color: var(--muted); margin: 0.5rem 0 0; }
 
   /* Insights */
-  .insights-actions { margin-bottom: 0.7rem; }
+  .insights-actions { display: flex; flex-wrap: wrap; gap: 0.4rem; margin-bottom: 0.7rem; }
   button.insight {
     appearance: none;
     border: 1px solid var(--accent);
@@ -470,6 +484,8 @@
       </div>
       <div class="insights-actions">
         <button type="button" class="insight" id="insights-proactive">💡 Insights: what do the patterns say?</button>
+        <button type="button" class="insight" id="suggest-nanny">🍼 nanny: next instruction</button>
+        <button type="button" class="insight" id="suggest-instructions">📋 Instructions: set a schedule</button>
       </div>
       <form class="chat-input" id="chat-form">
         <input id="chat-text" type="text" placeholder='Log something ("pooped at 3") — or ask a question ("how much should he nap?")' autocomplete="off" />
@@ -604,7 +620,9 @@ function appendMessage(container, role, text, isError) {
   div.className = 'msg ' + role + (isError ? ' error' : '');
   const tag = document.createElement('span');
   tag.className = 'tag';
-  tag.textContent = role === 'user' ? 'You' : container.dataset.agent;
+  tag.textContent = role === 'user' ? 'You'
+    : role === 'sitter' ? 'Sitter reminder'
+    : container.dataset.agent;
   div.appendChild(tag);
   div.appendChild(document.createTextNode(text));
   container.appendChild(div);
@@ -687,6 +705,17 @@ function isInsightQuestion(text) {
   return /\?\s*$/.test(trimmed) || QUESTION_STARTERS.test(trimmed);
 }
 
+// A schedule ("Instructions: …" / "Schedule … Instructions: …") or the bare
+// "nanny" prompt is handled by the Sitter Agent, not the classifier/insights
+// paths — its reply is rendered as a blue sitter reminder.
+function isSitterPrompt(text) {
+  const t = text.trim();
+  return /^nanny$/i.test(t) || /^(schedule\s*:?\s*)?instructions\s*:/i.test(t);
+}
+function isScheduleSet(text) {
+  return /^(schedule\s*:?\s*)?instructions\s*:/i.test(text.trim());
+}
+
 async function sendChat(text, opts) {
   opts = opts || {};
   text = (text || '').trim();
@@ -695,7 +724,14 @@ async function sendChat(text, opts) {
   addMessage('user', text);
   input.disabled = true;
   try {
-    if (isInsightQuestion(text)) {
+    if (isSitterPrompt(text)) {
+      const data = await postJSON('/api/chat', { text });
+      addMessage(data.ok ? 'sitter' : 'agent', data.response_text, !data.ok);
+      // A newly set schedule changes today's reminders — reset the "already
+      // shown" marker so the new instructions can surface, then reload them.
+      if (data.ok && isScheduleSet(text)) resetAndReloadSchedule();
+      if (opts.viaVoice) speak(data.response_text);
+    } else if (isInsightQuestion(text)) {
       const data = await postJSON('/api/insights', { question: text });
       addMessage('agent', data.response_text, !data.ok);
       if (opts.viaVoice) speak(data.response_text);
@@ -868,6 +904,75 @@ async function requestInsight(question) {
 document.getElementById('insights-proactive').addEventListener('click', (e) => {
   e.target.disabled = true;
   requestInsight('').finally(() => { e.target.disabled = false; });
+});
+
+// --- Sitter schedule: proactive reminders for the human nanny ---------------
+// The Sitter Agent (backend) parses a parent's "Instructions:" schedule into
+// timed reminders; here we surface them to the sitter in blue: one fresh nudge
+// of the instruction in effect right now, every 20 minutes through the day,
+// plus the current one immediately on load. The "nanny" prompt asks for the
+// next instruction on demand (rendered blue by sendChat above).
+const REMINDER_INTERVAL_MS = 20 * 60 * 1000; // every 20 minutes
+let sitterReminders = [];
+
+function addSitterReminder(text) { appendMessage(log, 'sitter', text, false); }
+
+function to12h(hhmm) {
+  const h = parseInt(hhmm.slice(0, 2), 10), m = hhmm.slice(3, 5);
+  const ap = h < 12 ? 'AM' : 'PM';
+  return ((h % 12) || 12) + ':' + m + ' ' + ap;
+}
+
+function nowHHMM() {
+  const n = new Date();
+  return String(n.getHours()).padStart(2, '0') + ':' + String(n.getMinutes()).padStart(2, '0');
+}
+
+// The instruction in effect right now: the latest reminder already due, or the
+// first upcoming one before the day's schedule has started.
+function currentInstruction() {
+  if (!sitterReminders.length) return null;
+  const now = nowHHMM();
+  const due = sitterReminders.filter((r) => r.time <= now);
+  if (due.length) return due.reduce((a, b) => (a.time >= b.time ? a : b));
+  return sitterReminders.reduce((a, b) => (a.time <= b.time ? a : b));
+}
+
+// Fire the current instruction, but never repeat the same slot back-to-back so
+// the 20-minute cadence advances through the day rather than spamming one line.
+let lastReminderTime = null;
+function fireSitterReminder(force) {
+  const rem = currentInstruction();
+  if (!rem) return;
+  if (!force && rem.time === lastReminderTime) return;
+  lastReminderTime = rem.time;
+  addSitterReminder(to12h(rem.time) + ' — ' + rem.text);
+}
+
+async function loadSchedule() {
+  try {
+    const res = await fetch(API_BASE + '/api/schedule', { headers: authHeaders() });
+    if (res.ok) {
+      const data = await res.json();
+      sitterReminders = (data && data.reminders) || [];
+    }
+  } catch (err) { /* leave reminders empty on error */ }
+}
+
+async function resetAndReloadSchedule() {
+  lastReminderTime = null;
+  await loadSchedule();
+  fireSitterReminder(true);
+}
+
+document.getElementById('suggest-nanny').addEventListener('click', () => sendChat('nanny'));
+document.getElementById('suggest-instructions').addEventListener('click', () => {
+  const input = document.getElementById('chat-text');
+  // Prefill an editable one-line schedule (semicolons are parsed as line
+  // breaks) so the parent can tweak and send it.
+  input.value = 'Instructions:; AM; 9: 7 oz milk + vit D; 10:30: nap, potty, cloth diaper; '
+    + '11: solids; PM; 1: 7 oz milk; 2: nap, potty; 3: solids veggies';
+  input.focus();
 });
 
 // --- Corpus tab: Google Search toggle + NotebookLM-style reference list ----
@@ -1205,6 +1310,11 @@ document.querySelectorAll('.tab-btn').forEach((btn) => {
 });
 
 renderRhythm();
+
+// Surface the sitter's current instruction on load, then a fresh nudge every
+// 20 minutes through the day.
+loadSchedule().then(() => fireSitterReminder(true));
+setInterval(() => fireSitterReminder(false), REMINDER_INTERVAL_MS);
 </script>
 </body>
 </html>
