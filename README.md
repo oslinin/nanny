@@ -228,7 +228,10 @@ All off by default; each lights up only when its env var is set.
   seeded from UNICEF's "Art of Parenting" guide that every parent can draw on
   (`uv run python -m nanny.seed_unicef_corpus "path/to/The Art of Parenting.pdf"`,
   a one-time operator step — supply the PDF yourself, it isn't committed to this
-  repo; see `nanny/corpus.py` and `nanny/seed_unicef_corpus.py`).
+  repo; see `nanny/corpus.py` and `nanny/seed_unicef_corpus.py`). RAG needs its
+  own real Vertex region — set `NANNY_RAG_LOCATION` if `GOOGLE_CLOUD_LOCATION`
+  is `global` (as it often is for Google Search grounding above), since RAG
+  doesn't support `global`.
 - **Speak to log** — a 🎤 button uses the browser's Web Speech API (free, no
   keys). For browsers without it, set `NANNY_STT_ENABLED=true`
   (`uv sync --extra speech`) to enable the Cloud Speech-to-Text fallback at

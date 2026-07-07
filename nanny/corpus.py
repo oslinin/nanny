@@ -54,9 +54,12 @@ def display_name(client_id: str) -> str:
 def _init_vertex() -> None:
     import vertexai
 
+    # Deliberately not GOOGLE_CLOUD_LOCATION: that's commonly set to "global"
+    # for ADK's built-in google_search grounding tool (see nanny/research.py),
+    # but Vertex AI RAG isn't available in "global" and needs a real region.
     vertexai.init(
         project=os.environ["GOOGLE_CLOUD_PROJECT"],
-        location=os.environ.get("GOOGLE_CLOUD_LOCATION", "us-east1"),
+        location=os.environ.get("NANNY_RAG_LOCATION", "us-east1"),
     )
 
 
@@ -76,6 +79,24 @@ def resolve_corpus_name(client_id: str) -> str | None:
     return None
 
 
+def _embedding_model_config():
+    """Pins the RAG embedding model to text-embedding-005.
+
+    The SDK default, textembedding-gecko, has zero default quota for new
+    projects (``429 Quota exceeded ... base model: textembedding-gecko``) —
+    text-embedding-005 is the current model and gets real default quota.
+    """
+    from vertexai import rag
+
+    return rag.RagVectorDbConfig(
+        rag_embedding_model_config=rag.RagEmbeddingModelConfig(
+            vertex_prediction_endpoint=rag.VertexPredictionEndpoint(
+                publisher_model="publishers/google/models/text-embedding-005",
+            )
+        )
+    )
+
+
 def get_or_create_corpus(client_id: str) -> str:
     """Returns this client's corpus resource name, creating it on first use."""
     from vertexai import rag
@@ -86,8 +107,19 @@ def get_or_create_corpus(client_id: str) -> str:
     corpus = rag.create_corpus(
         display_name=display_name(client_id),
         description="Parent-supplied reference material for the Nanny InsightsAgent.",
+        backend_config=_embedding_model_config(),
     )
     return corpus.name
+
+
+# Vertex AI RAG Engine's ingest pipeline appears to invoke a legacy
+# textembedding-gecko call for some internal step regardless of the corpus's
+# configured embedding model (see _embedding_model_config) — and new projects
+# get zero *sustained* quota for it, only a small per-minute burst. Uploading
+# one file after another can trip a 429 even though each succeeds in
+# isolation once the window resets, so retry with a cooldown.
+_QUOTA_RETRY_ATTEMPTS = 5
+_QUOTA_RETRY_COOLDOWN_SECONDS = 65
 
 
 def _upload_file_to_corpus(corpus_name: str, filename: str, data: bytes) -> None:
@@ -96,17 +128,26 @@ def _upload_file_to_corpus(corpus_name: str, filename: str, data: bytes) -> None
     The bytes are written to a temp path because ``rag.upload_file`` takes a
     filesystem path; Vertex RAG extracts the text (PDF/TXT/MD) on ingest.
     """
+    import time
+
     from vertexai import rag
 
     suffix = os.path.splitext(filename)[1] or ".txt"
     with tempfile.NamedTemporaryFile(suffix=suffix) as tmp:
         tmp.write(data)
         tmp.flush()
-        rag.upload_file(
-            corpus_name=corpus_name,
-            path=tmp.name,
-            display_name=filename,
-        )
+        for attempt in range(1, _QUOTA_RETRY_ATTEMPTS + 1):
+            try:
+                rag.upload_file(
+                    corpus_name=corpus_name,
+                    path=tmp.name,
+                    display_name=filename,
+                )
+                return
+            except RuntimeError as e:
+                if "Quota exceeded" not in str(e) or attempt == _QUOTA_RETRY_ATTEMPTS:
+                    raise
+                time.sleep(_QUOTA_RETRY_COOLDOWN_SECONDS)
 
 
 def add_file(client_id: str, filename: str, data: bytes) -> None:
@@ -163,6 +204,7 @@ def get_or_create_shared_unicef_corpus() -> str:
     corpus = rag.create_corpus(
         display_name=_SHARED_UNICEF_DISPLAY_NAME,
         description="Shared UNICEF parenting guidance, available to every parent.",
+        backend_config=_embedding_model_config(),
     )
     return corpus.name
 

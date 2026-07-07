@@ -37,6 +37,11 @@ agent-engine = [
 speech = [
     "google-cloud-speech>=2.27.0",
 ]
+# Needed only by nanny/seed_unicef_corpus.py, to split large PDFs into
+# page-range chunks (see _MAX_PAGES_PER_FILE there for why).
+corpus-seed = [
+    "pypdf>=5.0.0",
+]
 
 [tool.ruff]
 line-length = 88
