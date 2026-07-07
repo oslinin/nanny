@@ -6,18 +6,19 @@ activity log and answers the parent's question — or, when there's no question,
 proactively surfaces the most useful observation — grounded in reputable
 guidance rather than opinion.
 
-Three retrieval sources, layered so the agent is always useful and gets richer
-as more is configured (the same opt-in philosophy as ``NANNY_API_TOKEN`` etc.):
+Layered retrieval sources (the same opt-in philosophy as ``NANNY_API_TOKEN``):
 
 1. ``child-guidance`` skill (always on, offline) — curated, cited summaries of
    mainstream public-health guidance (see ``skills/child-guidance/``).
-2. Consensus.app via MCP (opt-in, ``NANNY_CONSENSUS_MCP_URL``) — scientific
-   consensus over the research literature.
-3. Scoped web search via a Google Programmable Search Engine (opt-in,
+2. Scoped web search via a Google Programmable Search Engine (opt-in,
    ``GOOGLE_CSE_ID`` + ``GOOGLE_CSE_API_KEY``) — pinned in the CSE console to
    reputable sites (cdc.gov, aap.org, healthychildren.org, who.int,
    unicef.org). The ADK built-in ``google_search`` is model-side grounding
    that can't be reliably domain-restricted, which is why this uses a CSE.
+   Toggleable per parent from the Corpus tab.
+3. The parent's reference documents (opt-in, ``NANNY_RAG_ENABLED``) — the shared
+   UNICEF guide plus their own uploads, via Vertex RAG, each toggleable in the
+   Corpus tab.
 
 With none configured (local dev, tests, this sandbox), the agent still answers
 from the log summary + the curated skill; with no API key at all it falls back
@@ -188,28 +189,6 @@ def _optional_research_tools() -> list:
     and run with nothing configured (local dev, tests, this sandbox).
     """
     tools: list = []
-
-    consensus_url = os.environ.get("NANNY_CONSENSUS_MCP_URL")
-    if consensus_url:
-        try:
-            from google.adk.tools.mcp_tool import (
-                McpToolset,
-                StreamableHTTPConnectionParams,
-            )
-
-            headers = {}
-            api_key = os.environ.get("NANNY_CONSENSUS_API_KEY")
-            if api_key:
-                headers["Authorization"] = f"Bearer {api_key}"
-            tools.append(
-                McpToolset(
-                    connection_params=StreamableHTTPConnectionParams(
-                        url=consensus_url, headers=headers or None
-                    )
-                )
-            )
-        except Exception as exc:  # pragma: no cover - depends on optional extra
-            logger.warning("Consensus MCP not available, skipping: %s", exc)
 
     if os.environ.get("GOOGLE_CSE_ID") and os.environ.get("GOOGLE_CSE_API_KEY"):
         tools.append(_search_reputable_child_health)

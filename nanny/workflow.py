@@ -14,7 +14,7 @@ engine (``google.adk.workflow``) and real ADK agents (``google.adk.agents``).
 reads a deterministic summary of the log (built by ``InsightsPrepNode``) and
 answers the parent's question — or proactively surfaces an observation —
 grounded in a curated ``child-guidance`` skill plus opt-in research tools
-(Consensus MCP, a scoped guidance search).
+(a scoped Google search and the parent's reference corpus).
 
 ``HistoryNode`` is a pure read: deployed on Vertex AI Agent Runtime, the
 graph is only reachable through ``stream_query``/``async_stream_query`` (no

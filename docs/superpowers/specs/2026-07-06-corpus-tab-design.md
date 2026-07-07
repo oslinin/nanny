@@ -56,11 +56,12 @@ data/<client_id>.sources.json
 
 ## The shared UNICEF corpus
 
-`assets/The Art of Parenting.pdf` (UNICEF's parenting guide; moved from
-`docs/` so it isn't committed into the GitHub Pages frontend folder and
-publicly served from there) seeds **one shared Vertex RAG corpus**, not a
-per-client one — every parent draws on the same ingested document rather
-than each getting their own copy uploaded to Vertex.
+An operator-supplied copy of UNICEF's "The Art of Parenting" guide seeds
+**one shared Vertex RAG corpus**, not a per-client one — every parent draws
+on the same ingested document rather than each getting their own copy
+uploaded to Vertex. The PDF is **not committed to this repo** (it's a
+copyrighted file whose license isn't confirmed here); the operator passes its
+path to the seed script.
 
 `nanny/corpus.py` gains:
 
@@ -77,10 +78,11 @@ than each getting their own copy uploaded to Vertex.
 ingestion. Fetching the PDF directly from unicef.org returns HTTP 403
 (Cloudflare bot protection) from every environment tried while designing
 this, including this sandbox, so there is no reliable way to fetch it
-programmatically at deploy time; the PDF is committed to the repo instead.
+programmatically at deploy time; the operator downloads it once and passes
+its path.
 
 ```
-uv run python -m nanny.seed_unicef_corpus   # defaults to assets/The Art of Parenting.pdf
+uv run python -m nanny.seed_unicef_corpus "path/to/The Art of Parenting.pdf"
 ```
 
 Run once per Vertex project, by whoever operates the deployment, using
