@@ -50,6 +50,11 @@ def fake_rag(monkeypatch):
     return fake
 
 
+def test_seed_requires_a_path(capsys):
+    assert seed_mod.main([]) == 1
+    assert "usage" in capsys.readouterr().err.lower()
+
+
 def test_seed_refuses_when_rag_disabled(monkeypatch, tmp_path, capsys):
     monkeypatch.delenv("NANNY_RAG_ENABLED", raising=False)
     pdf = tmp_path / "guide.pdf"

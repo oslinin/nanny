@@ -113,7 +113,7 @@ Nothing is required to run locally. Configure only what you need:
 | `NANNY_API_TOKEN` | Require `X-Nanny-Token` on all data endpoints (shared gate for a public deploy). |
 | `NANNY_ALLOWED_ORIGINS` | Comma-separated origins allowed cross-origin (e.g. your GitHub Pages URL). |
 | `NANNY_PORT` | Change the local bind port (default `8000`). |
-| `NANNY_RAG_ENABLED`, `NANNY_STT_ENABLED`, `NANNY_CONSENSUS_*`, `GOOGLE_CSE_*` | Opt-in InsightsAgent tools and speech fallback (see [Optional features](#optional-features)). |
+| `NANNY_RAG_ENABLED`, `NANNY_STT_ENABLED`, `GOOGLE_CSE_*` | Opt-in InsightsAgent tools and speech fallback (see [Optional features](#optional-features)). |
 
 Copy [`.env.example`](.env.example) to `.env` and fill in what applies.
 
@@ -259,22 +259,21 @@ curl -s -X POST "$SERVICE_URL/api/quick-tap" -H 'Content-Type: application/json'
 All off by default; each lights up only when its env var is set.
 
 - **Evidence-based insights** — `InsightsAgent` answers questions grounded in the
-  curated `child-guidance` skill (always on, offline + cited). Add
-  `NANNY_CONSENSUS_MCP_URL` (Consensus.app via MCP, no extra install needed —
-  `uv sync` already includes it) and/or `GOOGLE_CSE_ID` + `GOOGLE_CSE_API_KEY`
-  (scoped search over cdc.gov,
-  aap.org, who.int, …) for richer grounding. Always framed as "patterns to
-  discuss with your pediatrician," never a diagnosis. The parent controls
-  which of these the agent may actually draw on for a given turn from the
-  **Corpus** tab (`/api/sources`) — an unchecked source is hard-enforced,
-  removed from the model's tools or filtered out of retrieval results before
-  they ever reach the LLM, not just told not to use it.
+  curated `child-guidance` skill (always on, offline + cited). Add `GOOGLE_CSE_ID`
+  + `GOOGLE_CSE_API_KEY` (scoped search over cdc.gov, aap.org, who.int, …) for
+  richer grounding. Always framed as "patterns to discuss with your
+  pediatrician," never a diagnosis. The parent controls which sources the agent
+  may actually draw on for a given turn from the **Corpus** tab (`/api/sources`)
+  — an unchecked source is hard-enforced, removed from the model's tools or
+  filtered out of retrieval results before they ever reach the LLM, not just
+  told not to use it.
 - **Bring your own references (RAG)** — set `NANNY_RAG_ENABLED=true` (on both the
   Agent Runtime and Cloud Run deploys) to give each parent a private Vertex AI
   RAG corpus behind the `/api/corpus` endpoints, alongside one shared corpus
   seeded from UNICEF's "Art of Parenting" guide that every parent can draw on
-  (`uv run python -m nanny.seed_unicef_corpus`, a one-time operator step — see
-  `nanny/corpus.py` and `nanny/seed_unicef_corpus.py`).
+  (`uv run python -m nanny.seed_unicef_corpus "path/to/The Art of Parenting.pdf"`,
+  a one-time operator step — supply the PDF yourself, it isn't committed to this
+  repo; see `nanny/corpus.py` and `nanny/seed_unicef_corpus.py`).
 - **Speak to log** — a 🎤 button uses the browser's Web Speech API (free, no
   keys). For browsers without it, set `NANNY_STT_ENABLED=true`
   (`uv sync --extra speech`) to enable the Cloud Speech-to-Text fallback at

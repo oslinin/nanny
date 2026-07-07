@@ -6,10 +6,7 @@ readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
     "fastapi>=0.139.0",
-    # [mcp] gives InsightsAgent's opt-in Consensus MCP tool (nanny/research.py)
-    # its McpToolset out of the box; a no-op if NANNY_CONSENSUS_MCP_URL is
-    # never set, so bundling it unconditionally costs nothing at runtime.
-    "google-adk[mcp]>=2.3.0",
+    "google-adk>=2.3.0",
     "python-multipart>=0.0.9",
     "uvicorn>=0.50.0",
 ]
