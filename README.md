@@ -7,9 +7,9 @@ shared datastore, orchestrated as a real multi-agent ADK graph.
 Built for the [5-Day AI Agents: Intensive Vibe Coding Course With Google](https://www.kaggle.com/competitions/5-day-ai-agents-intensive-vibecoding-course-with-google)
 capstone (**Concierge Agents** track). It demonstrates three course concepts:
 **multi-agent ADK systems** (`ClassifierAgent`, `ResponderAgent`, `InsightsAgent`
-are genuine `LlmAgent` nodes), **agent skills** (`care-tips`, `child-guidance`),
-and **security** (chat input is screened for prompt-injection and secrets before
-it reaches the model — `nanny/security.py`).
+are genuine `LlmAgent` nodes), **agent skills** (the `care-tips` skill), and
+**security** (chat input is screened for prompt-injection and secrets before it
+reaches the model — `nanny/security.py`).
 
 ## Orchestration graph
 
@@ -28,7 +28,7 @@ flowchart TD
     Save["SaveActivityNode<br>(deterministic storage, no LLM)"]
     Responder["ResponderAgent<br>(LlmAgent — summary + care-tips skill)"]
     History["HistoryNode<br>(deterministic: read-only history)"]
-    InsightsPrep["InsightsPrepNode<br>(deterministic: summarize log)"]
+    InsightsPrep["InsightsPrepNode<br>(deterministic: summarize log + load baby profile)"]
     Insights["InsightsAgent<br>(LlmAgent — evidence-grounded, cited)"]
     ErrorNode["ErrorNode<br>(friendly rejection)"]
 
@@ -45,6 +45,19 @@ flowchart TD
     Router --> Save
     Save -- "saved" --> Responder
     Save -- "error" --> ErrorNode
+
+    subgraph Sources["Evidence sources for InsightsAgent"]
+        direction TB
+        LogSummary[["Log summary<br>(per-type counts & totals)"]]
+        BabyProfile[["Baby profile<br>(age, weight, height — Baby tab)"]]
+        GoogleSearch{{"Google Search grounding<br>(opt-in, per-parent toggle)"}}
+        RefCorpus[("Reference corpus — UNICEF +<br>your uploads (opt-in RAG, toggle)")]
+    end
+
+    LogSummary --> InsightsPrep
+    BabyProfile --> InsightsPrep
+    GoogleSearch -. "tool" .-> Insights
+    RefCorpus -. "tool" .-> Insights
 
     Classifier -. "model error → heuristic" .-> Classifier
     Responder -. "model error → template" .-> Responder
@@ -145,7 +158,7 @@ curl -s -X POST http://127.0.0.1:8000/api/chat -H 'Content-Type: application/jso
 
 curl -s http://127.0.0.1:8000/api/history
 
-# Evidence-based insight, grounded in the logged activity + child-guidance skill:
+# Evidence-based insight, grounded in the logged activity + baby profile:
 curl -s -X POST http://127.0.0.1:8000/api/insights -H 'Content-Type: application/json' \
   -d '{"question":"is my baby feeding enough?"}'
 
@@ -217,12 +230,12 @@ curl -s -X POST "$NANNY_SERVICE_URL/api/quick-tap" -H 'Content-Type: application
 
 All off by default; each lights up only when its env var is set.
 
-- **Evidence-based insights** — `InsightsAgent` answers questions grounded in the
-  curated `child-guidance` skill (always on, offline + cited), plus ADK's
-  built-in Google Search grounding tool for richer web-sourced context —
-  lights up automatically once a real Gemini/Vertex backend is configured
-  (no separate API key of its own). Always framed as "patterns to discuss
-  with your pediatrician," never a diagnosis. The parent controls which
+- **Evidence-based insights** — `InsightsAgent` answers questions grounded in a
+  deterministic summary of the logged activity plus the baby's profile (always
+  on, offline), and — once a real Gemini/Vertex backend is configured (no
+  separate API key of its own) — ADK's built-in Google Search grounding tool for
+  richer web-sourced context. Always framed as "patterns to discuss with your
+  pediatrician," never a diagnosis. The parent controls which
   sources the agent may actually draw on for a given turn from the
   **Corpus** tab (`/api/sources`) — an unchecked source is hard-enforced,
   removed from the model's tools or filtered out of retrieval results before

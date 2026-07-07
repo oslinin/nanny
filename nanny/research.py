@@ -6,22 +6,22 @@ activity log and answers the parent's question — or, when there's no question,
 proactively surfaces the most useful observation — grounded in reputable
 guidance rather than opinion.
 
-Layered retrieval sources (the same opt-in philosophy as ``NANNY_API_TOKEN``):
+The agent always reasons over a deterministic summary of the client's own log
+plus the baby's profile (age/measurements); on top of that it draws on opt-in
+retrieval tools (the same opt-in philosophy as ``NANNY_API_TOKEN``):
 
-1. ``child-guidance`` skill (always on, offline) — curated, cited summaries of
-   mainstream public-health guidance (see ``skills/child-guidance/``).
-2. ADK's built-in ``google_search`` grounding tool — general web search,
+1. ADK's built-in ``google_search`` grounding tool — general web search,
    piggybacking on whatever Gemini/Vertex access the agent already has, so no
    separate API key or search-engine setup to configure or misconfigure.
    Trade-off: it's model-side grounding, so results can't be restricted to a
    fixed list of domains the way a scoped Custom Search Engine could be.
    Toggleable per parent from the Corpus tab.
-3. The parent's reference documents (opt-in, ``NANNY_RAG_ENABLED``) — the shared
+2. The parent's reference documents (opt-in, ``NANNY_RAG_ENABLED``) — the shared
    UNICEF guide plus their own uploaded files, via Vertex RAG, each
    toggleable in the Corpus tab.
 
 With none configured (local dev, tests, this sandbox), the agent still answers
-from the log summary + the curated skill; with no API key at all it falls back
+from the log summary + baby profile; with no API key at all it falls back
 to a deterministic summary via ``_summarize_insights`` — exactly how the
 Classifier/Responder degrade offline. All optional integrations import their
 dependencies lazily inside helpers so this module imports cleanly with no
@@ -32,14 +32,11 @@ from __future__ import annotations
 
 import logging
 import os
-from pathlib import Path
 
 from google.adk.agents.llm_agent import LlmAgent
 from google.adk.models.llm_response import LlmResponse
-from google.adk.skills import load_skill_from_dir
 from google.adk.tools.google_search_tool import GoogleSearchTool
 from google.adk.tools.retrieval.base_retrieval_tool import BaseRetrievalTool
-from google.adk.tools.skill_toolset import SkillToolset
 from google.genai import types
 
 from . import corpus
@@ -49,7 +46,6 @@ from .security import screen_text
 logger = logging.getLogger("nanny.research")
 
 _MODEL_NAME = os.environ.get("NANNY_GEMINI_MODEL", "gemini-flash-latest")
-_SKILLS_DIR = Path(__file__).resolve().parent.parent / "skills"
 
 
 def _text_response(text: str) -> LlmResponse:
@@ -58,11 +54,11 @@ def _text_response(text: str) -> LlmResponse:
     )
 
 
-# InsightsAgent always has multiple tools (at minimum the child-guidance
-# SkillToolset), so ADK's built-in google_search tool always gets wrapped
-# into a sub-agent named this (see _optional_research_tools) — that wrapping
-# is what lets it combine with other tools at all, and gives it a normal
-# name/declaration we can filter out below like any other tool.
+# ADK's built-in google_search is attached with bypass_multi_tools_limit=True
+# (see _optional_research_tools), which wraps it into a sub-agent named this —
+# that wrapping is what lets it coexist with other tools (e.g. the RAG
+# retrieval tool) and gives it a normal name/declaration we can filter out
+# below like any other tool.
 _GOOGLE_SEARCH_TOOL_NAME = "google_search_agent"
 
 
@@ -148,10 +144,10 @@ def _optional_research_tools() -> list:
     tools: list = []
 
     if _model_available():
-        # bypass_multi_tools_limit=True: InsightsAgent always has other tools
-        # (at least the child-guidance SkillToolset), and google_search can't
-        # be combined with other tools unless wrapped into its own sub-agent
-        # — this flag makes ADK do that wrapping (see _GOOGLE_SEARCH_TOOL_NAME).
+        # bypass_multi_tools_limit=True: google_search can't be combined with
+        # other tools (e.g. the RAG retrieval tool) unless wrapped into its own
+        # sub-agent — this flag makes ADK do that wrapping, which also gives it
+        # the stable name we filter on (see _GOOGLE_SEARCH_TOOL_NAME).
         tools.append(GoogleSearchTool(bypass_multi_tools_limit=True))
 
     if corpus.rag_enabled():
@@ -258,10 +254,9 @@ Rules:
   10-month-old differ greatly), and factor in weight/height when relevant.
 - Tie every point to the specific numbers in the summary above; don't speak in
   generalities disconnected from what was logged.
-- Consult the 'child-guidance' skill for mainstream norms before relying on
-  general knowledge, and cite the source briefly when you use one (e.g. "per
-  CDC/AAP guidance"). If a research tool is available and relevant, use it and
-  cite what it returns.
+- Ground claims in mainstream public-health norms (e.g. CDC/AAP/WHO) and cite
+  the source briefly when you use one (e.g. "per CDC/AAP guidance"). If a
+  research tool is available and relevant, use it and cite what it returns.
 - If a 'search_my_references' tool is available, prefer the parent's own
   uploaded references when the question may be covered by them, and say when an
   answer draws on their material.
@@ -280,8 +275,7 @@ def build_insights_agent() -> LlmAgent:
     Terminal node in the graph: writes ``response_text`` and, like the
     Responder, degrades to a template/offline summary when no API key is set.
     """
-    skill = load_skill_from_dir(_SKILLS_DIR / "child-guidance")
-    tools = [SkillToolset(skills=[skill]), *_optional_research_tools()]
+    tools = _optional_research_tools()
     return LlmAgent(
         name="insights_agent",
         model=_MODEL_NAME,

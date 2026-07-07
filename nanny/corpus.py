@@ -1,8 +1,8 @@
 """Per-client parent-controlled reference corpus, backed by Vertex AI RAG.
 
-Keeps the shared ``child-guidance`` skill as the default, and lets each parent
-upload their *own* references (their copy of a parenting book, a pediatrician's
-handout, etc.) that the InsightsAgent can then retrieve from. Each client id
+Keeps the shared UNICEF parenting guide as the default corpus, and lets each
+parent upload their *own* references (their copy of a parenting book, a
+pediatrician's handout, etc.) that the InsightsAgent can then retrieve from. Each client id
 gets its own managed Vertex RAG corpus — the same per-visitor isolation as the
 activity log — named deterministically so both this module (corpus management,
 run from the dashboard) and the retrieval tool (run inside the agent) resolve

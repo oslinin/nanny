@@ -1,11 +1,11 @@
 """Tests for the InsightsAgent path (/api/insights).
 
-Everything here exercises the fully offline path — no API key, no Consensus
-MCP, no scoped-search CSE (none of which this sandbox has). That path is the
-default, and it's what has to keep working: the agent answers from a
-deterministic summary of the client's own log plus the bundled curated
-``child-guidance`` skill. The opt-in research tools are constructed only when
-their env vars are set, so their absence here is the normal, tested case.
+Everything here exercises the fully offline path — no API key, no Google Search
+grounding, no RAG (none of which this sandbox has). That path is the default,
+and it's what has to keep working: the agent answers from a deterministic
+summary of the client's own log plus the baby's profile. The opt-in research
+tools are constructed only when their env vars are set, so their absence here is
+the normal, tested case.
 
 Reuses the same env-var-reload approach as tests/test_server.py (stores
 reloaded before server so the per-client data dir is fresh per test).
@@ -145,17 +145,6 @@ def test_insights_token_gated_when_configured(tmp_path, monkeypatch):
     assert auth.status_code == 200
 
 
-def test_child_guidance_skill_loads():
-    # The curated corpus skill must load like any other ADK skill — this is what
-    # the InsightsAgent attaches via SkillToolset.
-    from google.adk.skills import load_skill_from_dir
-
-    from nanny.research import _SKILLS_DIR
-
-    skill = load_skill_from_dir(_SKILLS_DIR / "child-guidance")
-    assert skill is not None
-
-
 def test_build_insights_context_aggregates_by_type_and_day():
     activities = [
         {
@@ -252,8 +241,8 @@ def test_optional_research_tools_attaches_google_search_when_model_available(
     tools = _optional_research_tools()
     search_tools = [t for t in tools if isinstance(t, GoogleSearchTool)]
     assert len(search_tools) == 1
-    # Must bypass the multi-tools limit: InsightsAgent always has other tools
-    # (at least the child-guidance SkillToolset) alongside this one.
+    # Must bypass the multi-tools limit so google_search can coexist with the
+    # RAG retrieval tool (and get a stable wrapped name to filter on).
     assert search_tools[0].bypass_multi_tools_limit is True
 
 
