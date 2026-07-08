@@ -76,26 +76,23 @@ def test_availability_google_search_needs_a_real_model_backend(monkeypatch, tmp_
     assert mod.availability("alice")["google_search"] is True
 
 
-def test_availability_uploads_and_unicef_need_rag_enabled(monkeypatch, tmp_path):
+def test_availability_uploads_always_on(monkeypatch, tmp_path):
+    # The corpus is local-or-File-Search now, no NANNY_RAG_ENABLED gate, so
+    # uploads are always available.
     monkeypatch.delenv("NANNY_RAG_ENABLED", raising=False)
     mod = _reload(tmp_path, monkeypatch)
-    avail = mod.availability("alice")
-    assert avail["uploads"] is False
-    assert avail["unicef"] is False
+    assert mod.availability("alice")["uploads"] is True
 
 
-def test_availability_unicef_also_needs_the_shared_corpus_seeded(monkeypatch, tmp_path):
-    mod = _reload(tmp_path, monkeypatch, NANNY_RAG_ENABLED="true")
+def test_availability_unicef_needs_the_shared_corpus_seeded(monkeypatch, tmp_path):
+    mod = _reload(tmp_path, monkeypatch)
     monkeypatch.setattr(mod.corpus_mod, "resolve_shared_unicef_corpus", lambda: None)
-    avail = mod.availability("alice")
-    # uploads only needs RAG on; unicef additionally needs the corpus seeded.
-    assert avail["uploads"] is True
-    assert avail["unicef"] is False
+    # uploads is always on; unicef additionally needs the shared corpus seeded.
+    assert mod.availability("alice")["uploads"] is True
+    assert mod.availability("alice")["unicef"] is False
 
     monkeypatch.setattr(
-        mod.corpus_mod,
-        "resolve_shared_unicef_corpus",
-        lambda: "projects/p/locations/l/ragCorpora/1",
+        mod.corpus_mod, "resolve_shared_unicef_corpus", lambda: "/data/corpus/shared"
     )
     assert mod.availability("alice")["unicef"] is True
 

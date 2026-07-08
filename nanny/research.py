@@ -16,9 +16,10 @@ retrieval tools (the same opt-in philosophy as ``NANNY_API_TOKEN``):
    Trade-off: it's model-side grounding, so results can't be restricted to a
    fixed list of domains the way a scoped Custom Search Engine could be.
    Toggleable per parent from the Corpus tab.
-2. The parent's reference documents (opt-in, ``NANNY_RAG_ENABLED``) — the shared
-   UNICEF guide plus their own uploaded files, via Vertex RAG, each
-   toggleable in the Corpus tab.
+2. The parent's reference documents — the shared UNICEF guide plus their own
+   uploaded files, retrieved from the reference corpus (``nanny/corpus.py``):
+   Google's managed Gemini File Search when a key allows it, else a local BM25
+   index — each toggleable in the Corpus tab.
 
 With none configured (local dev, tests, this sandbox), the agent still answers
 from the log summary + baby profile; with no API key at all it falls back
@@ -150,34 +151,22 @@ def _optional_research_tools() -> list:
         # the stable name we filter on (see _GOOGLE_SEARCH_TOOL_NAME).
         tools.append(GoogleSearchTool(bypass_multi_tools_limit=True))
 
+    # The reference corpus always resolves (File Search or local BM25), so the
+    # retrieval tool is always available — it simply returns "no passages" until
+    # the parent uploads one or the shared UNICEF guide is seeded.
     if corpus.rag_enabled():
         tools.append(_PerClientRagRetrieval())
 
     return tools
 
 
-async def _retrieve_passages(corpus_name: str, query: str) -> list[str]:
-    from vertexai import rag
-
-    response = await rag.async_retrieve_contexts(
-        text=query,
-        rag_resources=[rag.RagResource(rag_corpus=corpus_name)],
-        rag_retrieval_config=rag.RagRetrievalConfig(top_k=5),
-    )
-    return list(response.contexts.contexts)
-
-
 class _PerClientRagRetrieval(BaseRetrievalTool):
-    """Retrieves from the shared UNICEF corpus and *this parent's own* Vertex
-    RAG corpus, subject to the parent's Corpus-tab source toggles.
+    """Retrieves from the shared UNICEF corpus and *this parent's own* corpus,
+    subject to the parent's Corpus-tab source toggles.
 
-    A custom ``BaseRetrievalTool`` rather than ADK's built-in
-    ``VertexAiRagRetrieval`` on purpose: that one pins a fixed set of corpora at
-    construction (and, on Gemini 2, injects a model-side retrieval tool), so it
-    can't scope to the caller. This one reads the ``client_id`` from turn state
-    and queries only that client's corpus — the same per-visitor isolation as
-    the activity log. Only attached when ``NANNY_RAG_ENABLED`` is on, so it
-    never runs (and never imports ``vertexai``) in local dev/tests.
+    A custom ``BaseRetrievalTool`` reads the ``client_id`` from turn state and
+    queries only that client's corpus (``nanny/corpus.py`` — Gemini File Search
+    or local BM25) — the same per-visitor isolation as the activity log.
 
     Enforcement of each checkbox happens here, in tool code, before any
     passage reaches the model — not via a prompt instruction:
@@ -212,24 +201,15 @@ class _PerClientRagRetrieval(BaseRetrievalTool):
 
         if enabled_sources.get("unicef", True):
             shared_corpus = corpus.resolve_shared_unicef_corpus()
-            if shared_corpus:
-                passages.extend(
-                    c.text
-                    for c in await _retrieve_passages(shared_corpus, query)
-                    if getattr(c, "text", "")
-                )
+            passages.extend(
+                text for text, _fn in corpus.retrieve(shared_corpus, query) if text
+            )
 
-        corpus_name = corpus.resolve_corpus_name(client_id)
-        if corpus_name:
+        corpus_handle = corpus.resolve_corpus_name(client_id)
+        if corpus_handle:
             upload_prefs = enabled_sources.get("uploads") or {}
-            for c in await _retrieve_passages(corpus_name, query):
-                text = getattr(c, "text", "")
-                if not text:
-                    continue
-                filename = getattr(c, "source_display_name", "") or getattr(
-                    c, "source_uri", ""
-                )
-                if upload_prefs.get(filename, True):
+            for text, filename in corpus.retrieve(corpus_handle, query):
+                if text and upload_prefs.get(filename, True):
                     passages.append(text)
 
         if not passages:

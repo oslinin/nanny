@@ -66,7 +66,7 @@ flowchart TD
         LogSummary[["Log summary<br>(per-type counts & totals)"]]
         BabyProfile[["Baby profile<br>(age, weight, height — Baby tab)"]]
         GoogleSearch{{"Google Search grounding<br>(opt-in, per-parent toggle)"}}
-        RefCorpus[("Reference corpus — UNICEF +<br>your uploads (opt-in RAG, toggle)")]
+        RefCorpus[("Reference corpus — UNICEF + your uploads<br>(Gemini File Search or local BM25, toggle)")]
     end
 
     LogSummary --> InsightsPrep
@@ -173,7 +173,7 @@ Nothing is required to run locally. Configure only what you need:
 | `NANNY_API_TOKEN` | Require `X-Nanny-Token` on all data endpoints (shared gate for a public deploy). |
 | `NANNY_ALLOWED_ORIGINS` | Comma-separated origins allowed cross-origin (e.g. your GitHub Pages URL). |
 | `NANNY_PORT` | Change the local bind port (default `8000`). |
-| `NANNY_RAG_ENABLED`, `NANNY_STT_ENABLED` | Opt-in InsightsAgent RAG tool and speech fallback (see [Optional features](#optional-features)). |
+| `NANNY_CORPUS_BACKEND`, `NANNY_STT_ENABLED` | Reference-corpus backend (`auto`/`file_search`/`local`) and speech fallback (see [Optional features](#optional-features)). |
 
 Copy [`.env.example`](.env.example) to `.env` and fill in what applies.
 
@@ -285,16 +285,27 @@ All off by default; each lights up only when its env var is set.
   (`/api/profile`, always on, pre-filled with sensible defaults) records the
   baby's age/weight/height; those details ride in the same grounding context so
   answers are weighed against this child's actual age and size.
-- **Bring your own references (RAG)** — set `NANNY_RAG_ENABLED=true` (on both the
-  Agent Runtime and Cloud Run deploys) to give each parent a private Vertex AI
-  RAG corpus behind the `/api/corpus` endpoints, alongside one shared corpus
-  seeded from UNICEF's "Art of Parenting" guide that every parent can draw on
+- **Bring your own references (RAG)** — always on, no cloud config required. Each
+  parent gets a private reference corpus behind the `/api/corpus` endpoints,
+  alongside one shared corpus seeded from UNICEF's "Art of Parenting" guide
   (`uv run python -m nanny.seed_unicef_corpus "path/to/The Art of Parenting.pdf"`,
   a one-time operator step — supply the PDF yourself, it isn't committed to this
-  repo; see `nanny/corpus.py` and `nanny/seed_unicef_corpus.py`). RAG needs its
-  own real Vertex region — set `NANNY_RAG_LOCATION` if `GOOGLE_CLOUD_LOCATION`
-  is `global` (as it often is for Google Search grounding above), since RAG
-  doesn't support `global`.
+  repo). Two interchangeable backends sit behind one interface (see
+  `nanny/corpus.py`):
+  - **Gemini File Search** — Google's managed, NotebookLM-style RAG (uploads are
+    chunked + embedded server-side, retrieved with citations). Used when a Gemini
+    Developer API key (`GEMINI_API_KEY`) is set and the File Search API is
+    reachable. It's a different surface from Vertex AI RAG, so it sidesteps the
+    Vertex embedding-model restrictions that blocked the old backend.
+  - **Local BM25** — a pure-Python lexical index (`rank-bm25` over text chunks
+    under `NANNY_DATA_DIR`), no cloud/embeddings/key. The default fallback, so
+    the corpus works in local dev, tests, and offline.
+
+  Selection is automatic (File Search when a usable key is present, else local);
+  pin it with `NANNY_CORPUS_BACKEND=auto|file_search|local`. Note: the local
+  backend stores files on the server's own disk, so it's shared with the agent
+  only when the agent runs in-process (the default backend); the File Search
+  backend has no such constraint.
 - **Speak to log** — a 🎤 button uses the browser's Web Speech API (free, no
   keys). For browsers without it, set `NANNY_STT_ENABLED=true`
   (`uv sync --extra speech`) to enable the Cloud Speech-to-Text fallback at
