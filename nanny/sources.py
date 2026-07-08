@@ -97,12 +97,10 @@ def availability(client_id: str) -> dict[str, bool]:
     # InsightsAgent already needs — no separate credential of its own — so
     # it's available exactly when a real model call can be made at all.
     google_search = _model_available()
-    # unicef: RAG enabled AND shared corpus actually seeded
-    unicef = (
-        corpus_mod.rag_enabled()
-        and corpus_mod.resolve_shared_unicef_corpus() is not None
-    )
-    # uploads: RAG enabled (same as existing refs-panel gating)
+    # unicef: the reference corpus is always available (File Search or local
+    # BM25), so this row shows once the shared corpus has actually been seeded.
+    unicef = corpus_mod.resolve_shared_unicef_corpus() is not None
+    # uploads: always available now that the corpus needs no cloud config.
     uploads = corpus_mod.rag_enabled()
     return {
         "google_search": google_search,

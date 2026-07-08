@@ -9,6 +9,11 @@ dependencies = [
     "google-adk>=2.3.0",
     "python-multipart>=0.0.9",
     "uvicorn>=0.50.0",
+    # Reference corpus (nanny/corpus.py) local BM25 fallback: parse PDFs and
+    # rank text chunks with no cloud/embeddings. The Gemini File Search backend
+    # needs neither, but the fallback must always be importable.
+    "pypdf>=5.0.0",
+    "rank-bm25>=0.2.2",
 ]
 
 [dependency-groups]
@@ -36,11 +41,6 @@ agent-engine = [
 # browser's free Web Speech API, which needs nothing here.
 speech = [
     "google-cloud-speech>=2.27.0",
-]
-# Needed only by nanny/seed_unicef_corpus.py, to split large PDFs into
-# page-range chunks (see _MAX_PAGES_PER_FILE there for why).
-corpus-seed = [
-    "pypdf>=5.0.0",
 ]
 
 [tool.ruff]
