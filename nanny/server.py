@@ -254,7 +254,9 @@ if _ALLOWED_ORIGINS:
     app.add_middleware(
         CORSMiddleware,
         allow_origins=_ALLOWED_ORIGINS,
-        allow_methods=["GET", "POST"],
+        # DELETE is needed for removing a corpus reference (DELETE
+        # /api/corpus/{f}) cross-origin from the GitHub Pages frontend.
+        allow_methods=["GET", "POST", "DELETE"],
         allow_headers=["Content-Type", "X-Nanny-Token", "X-Nanny-Client-Id"],
     )
 
