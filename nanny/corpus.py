@@ -64,14 +64,10 @@ _fs_probe: bool | None = None
 
 
 def _has_dev_key() -> bool:
-    """True when a Gemini *Developer API* key is configured (File Search is not
-    available on the Vertex backend)."""
-    if os.environ.get("GOOGLE_GENAI_USE_VERTEXAI", "").strip().lower() in (
-        "1",
-        "true",
-        "yes",
-    ):
-        return False
+    """True when a Gemini API key is configured. File Search always talks to the
+    Gemini Developer API (``_fs_client`` builds the client with ``vertexai=False``
+    and this key), so it's usable even when the *model* backend is Vertex — it
+    just needs a key of its own."""
     return bool(os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY"))
 
 
