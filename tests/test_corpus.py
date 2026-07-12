@@ -131,6 +131,14 @@ def test_backend_is_local_without_a_key(monkeypatch):
     assert corpus_mod._use_file_search() is False
 
 
+def test_file_search_eligible_even_with_vertex_model_backend(monkeypatch):
+    # File Search uses the Developer API (its client is built vertexai=False), so
+    # a Vertex *model* backend doesn't disable it — it just needs a key.
+    monkeypatch.setenv("GOOGLE_GENAI_USE_VERTEXAI", "true")
+    monkeypatch.setenv("GEMINI_API_KEY", "fake-key")
+    assert corpus_mod._has_dev_key() is True
+
+
 def test_auto_falls_back_to_local_when_file_search_probe_fails(monkeypatch):
     monkeypatch.setenv("NANNY_CORPUS_BACKEND", "auto")
     monkeypatch.setenv("GEMINI_API_KEY", "fake-key")

@@ -218,6 +218,10 @@ uv run agents-cli lint  # ruff + codespell + ty
 
 ## Deploy
 
+> Which features need a Gemini API key vs. Vertex, what runs on Cloud Run vs.
+> Agent Runtime, and rough cost estimates (incl. RAG options) are laid out in
+> **[docs/backends-and-costs.md](docs/backends-and-costs.md)**.
+
 Everything is driven by `.env` and **one script**, `scripts/deploy.sh`, which
 runs three stages in order — each writing what it discovers (the agent resource
 name, the Cloud Run URL) back into `.env`, so stages compose and re-runs are
@@ -267,6 +271,16 @@ curl -s -X POST "$NANNY_SERVICE_URL/api/quick-tap" -H 'Content-Type: application
 > Cloud Run's filesystem is ephemeral, so the activity log resets on container
 > recycle (migrating `nanny/store.py` to a database would fix it). ADK **session**
 > state is durable on deploy — Agent Runtime defaults to `VertexAiSessionService`.
+>
+> **Reference corpus on Cloud Run:** set `GEMINI_API_KEY` so the corpus uses
+> Gemini **File Search** (managed + persistent, server-side at Google) rather
+> than the local BM25 fallback, whose JSONL lives on that same ephemeral disk.
+> `scripts/deploy.sh` forwards `GEMINI_API_KEY` and `NANNY_CORPUS_BACKEND`
+> (`auto`/`file_search`/`local`). After changing the corpus code or backend,
+> **redeploy** (`scripts/deploy.sh dashboard --execute`) — merging to `main`
+> doesn't update the running service — and re-seed the shared UNICEF guide once
+> against the new backend (`uv run python -m nanny.seed_unicef_corpus …` with the
+> same env the service uses).
 
 ## Optional features
 

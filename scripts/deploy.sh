@@ -140,8 +140,12 @@ deploy_dashboard() {
   env+=",GOOGLE_CLOUD_LOCATION=${GOOGLE_CLOUD_LOCATION}"
   [[ -n "${NANNY_ALLOWED_ORIGINS:-}" ]] && env+=",NANNY_ALLOWED_ORIGINS=${NANNY_ALLOWED_ORIGINS}"
   [[ -n "${NANNY_AGENT_ENGINE_RESOURCE_NAME:-}" ]] && env+=",NANNY_AGENT_ENGINE_RESOURCE_NAME=${NANNY_AGENT_ENGINE_RESOURCE_NAME}"
-  [[ -n "${NANNY_RAG_ENABLED:-}" ]] && env+=",NANNY_RAG_ENABLED=${NANNY_RAG_ENABLED}"
   [[ -n "${NANNY_STT_ENABLED:-}" ]] && env+=",NANNY_STT_ENABLED=${NANNY_STT_ENABLED}"
+  # Reference-corpus backend: auto (default) picks Gemini File Search when
+  # GEMINI_API_KEY is set below, else the local BM25 index. Pin it explicitly
+  # with NANNY_CORPUS_BACKEND=file_search|local when needed. File Search is the
+  # right choice for a deploy — local BM25 lives on the instance's own disk.
+  [[ -n "${NANNY_CORPUS_BACKEND:-}" ]] && env+=",NANNY_CORPUS_BACKEND=${NANNY_CORPUS_BACKEND}"
   # Model backend for the in-process path (when no Agent Runtime resource) and
   # the opt-in Google-search grounding, passed through when present in .env.
   [[ -n "${GOOGLE_GENAI_USE_VERTEXAI:-}" ]] && env+=",GOOGLE_GENAI_USE_VERTEXAI=${GOOGLE_GENAI_USE_VERTEXAI}"
