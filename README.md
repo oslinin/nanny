@@ -218,6 +218,10 @@ uv run agents-cli lint  # ruff + codespell + ty
 
 ## Deploy
 
+> Which features need a Gemini API key vs. Vertex, what runs on Cloud Run vs.
+> Agent Runtime, and rough cost estimates (incl. RAG options) are laid out in
+> **[docs/backends-and-costs.md](docs/backends-and-costs.md)**.
+
 Everything is driven by `.env` and **one script**, `scripts/deploy.sh`, which
 runs three stages in order — each writing what it discovers (the agent resource
 name, the Cloud Run URL) back into `.env`, so stages compose and re-runs are
